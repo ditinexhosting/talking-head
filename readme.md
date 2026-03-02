@@ -323,11 +323,11 @@ If you find LivePortrait useful for your project or research, welcome to 🌟 th
 <details>
   <summary>Click to view Star chart</summary>
   <p align="center">
-    <a href="https://www.star-history.com/#KlingTeam/LivePortrait&Timeline" target="_blank">
+    <a href="https://www.star-history.com/#KlingAIResearch/LivePortrait&Timeline" target="_blank">
       <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=KlingTeam/LivePortrait&type=Timeline&theme=dark" />
-        <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=KlingTeam/LivePortrait&type=Timeline" />
-        <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=KlingTeam/LivePortrait&type=Timeline" width="90%" />
+        <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=KlingAIResearch/LivePortrait&type=Timeline&theme=dark" />
+        <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=KlingAIResearch/LivePortrait&type=Timeline" />
+        <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=KlingAIResearch/LivePortrait&type=Timeline" width="90%" />
       </picture>
     </a>
   </p>
