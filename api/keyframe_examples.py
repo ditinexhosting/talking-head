@@ -82,13 +82,15 @@ def talking_tilt_top_left_head_movement(start_frame=0):
     return start_frame + 20, keyframes
 
 def talking_chin_up_movement(start_frame=0):
-    """Gesture: Tilt head while talking."""
+    """Gesture: Chin up while talking."""
     keyframes = [
         Keyframe(frame_idx=start_frame + 0, yaw_deg=0, roll_deg=0, pitch_deg=0),
-        Keyframe(frame_idx=start_frame + 10, yaw_deg=0 , roll_deg=0, pitch_deg=-7),
-        Keyframe(frame_idx=start_frame + 20, yaw_deg=0, roll_deg=0, pitch_deg=0)
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=0 , roll_deg=0, pitch_deg=-3),
+        Keyframe(frame_idx=start_frame + 15, yaw_deg=0 , roll_deg=0, pitch_deg=-7),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0 , roll_deg=0, pitch_deg=-3),
+        Keyframe(frame_idx=start_frame + 25, yaw_deg=0, roll_deg=0, pitch_deg=0)
     ]
-    return start_frame + 20, keyframes
+    return start_frame + 25, keyframes
 
 # ============================================================================
 # Example 1: Simple head movements
