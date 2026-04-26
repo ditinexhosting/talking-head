@@ -18,7 +18,7 @@ from .config.inference_config import InferenceConfig
 from .config.crop_config import CropConfig
 from .utils.cropper import Cropper
 from .utils.camera import get_rotation_matrix
-from .utils.video import images2video, concat_frames, get_fps, add_audio_to_video, has_audio_stream
+from .utils.video import images2video, concat_frames, get_fps
 from .utils.crop import prepare_paste_back, paste_back
 from .utils.io import load_image_rgb, load_video, resize_to_limit, dump, load
 from .utils.helper import mkdir, basename, dct2device, is_video, is_template, remove_suffix, is_image, is_square_video, calc_motion_multiplier
@@ -37,6 +37,64 @@ class LivePortraitPipeline(object):
     def __init__(self, inference_cfg: InferenceConfig, crop_cfg: CropConfig):
         self.live_portrait_wrapper: LivePortraitWrapper = LivePortraitWrapper(inference_cfg=inference_cfg)
         self.cropper: Cropper = Cropper(crop_cfg=crop_cfg)
+        self._source_cache: dict = {}
+
+    def precompute_source(self, source_path: str) -> None:
+        """Run face detection + F/M model inference once for a fixed source image.
+        Results are cached on self._source_cache and reused in execute() automatically.
+        """
+        inf_cfg = self.live_portrait_wrapper.inference_cfg
+        crop_cfg = self.cropper.crop_cfg
+
+        img_rgb = load_image_rgb(source_path)
+        img_rgb = resize_to_limit(img_rgb, inf_cfg.source_max_dim, inf_cfg.source_division)
+
+        if inf_cfg.flag_do_crop:
+            crop_info = self.cropper.crop_source_image(img_rgb, crop_cfg)
+            if crop_info is None:
+                raise Exception("No face detected in the source image!")
+            source_lmk = crop_info['lmk_crop']
+            img_crop_256x256 = crop_info['img_crop_256x256']
+        else:
+            crop_info = None
+            source_lmk = self.cropper.calc_lmk_from_cropped_image(img_rgb)
+            img_crop_256x256 = cv2.resize(img_rgb, (256, 256))
+
+        I_s = self.live_portrait_wrapper.prepare_source(img_crop_256x256)
+        x_s_info = self.live_portrait_wrapper.get_kp_info(I_s)
+        x_c_s = x_s_info['kp']
+        R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
+        f_s = self.live_portrait_wrapper.extract_feature_3d(I_s)
+        x_s = self.live_portrait_wrapper.transform_keypoint(x_s_info)
+
+        lip_delta_before_animation = None
+        if inf_cfg.flag_normalize_lip and inf_cfg.flag_relative_motion and source_lmk is not None:
+            combined_lip_ratio = self.live_portrait_wrapper.calc_combined_lip_ratio([0.], source_lmk)
+            if combined_lip_ratio[0][0] >= inf_cfg.lip_normalize_threshold:
+                lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio)
+
+        mask_ori_float = None
+        if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching and crop_info is not None:
+            mask_ori_float = prepare_paste_back(
+                inf_cfg.mask_crop, crop_info['M_c2o'],
+                dsize=(img_rgb.shape[1], img_rgb.shape[0])
+            )
+
+        self._source_cache = {
+            'source_path': source_path,
+            'source_rgb': img_rgb,
+            'source_lmk': source_lmk,
+            'img_crop_256x256': img_crop_256x256,
+            'crop_info': crop_info,
+            'x_s_info': x_s_info,
+            'x_c_s': x_c_s,
+            'R_s': R_s,
+            'f_s': f_s,
+            'x_s': x_s,
+            'lip_delta_before_animation': lip_delta_before_animation,
+            'mask_ori_float': mask_ori_float,
+        }
+        log(f"Source precomputed and cached: {source_path}")
 
     def make_motion_template(self, I_lst, c_eyes_lst, c_lip_lst, **kwargs):
         n_frames = I_lst.shape[0]
@@ -107,9 +165,20 @@ class LivePortraitPipeline(object):
             # NOTE: load from template, it is fast, but the cropping video is None
             log(f"Load from template: {args.driving}, NOT the video, so the cropping video and audio are both NULL.", style='bold green')
             driving_template_dct = load(args.driving)
-            c_d_eyes_lst = driving_template_dct['c_eyes_lst'] if 'c_eyes_lst' in driving_template_dct.keys() else driving_template_dct['c_d_eyes_lst'] # compatible with previous keys
-            c_d_lip_lst = driving_template_dct['c_lip_lst'] if 'c_lip_lst' in driving_template_dct.keys() else driving_template_dct['c_d_lip_lst']
-            driving_n_frames = driving_template_dct['n_frames']
+            n_template_frames = driving_template_dct['n_frames']
+            if 'c_eyes_lst' in driving_template_dct:
+                c_d_eyes_lst = driving_template_dct['c_eyes_lst']
+            elif 'c_d_eyes_lst' in driving_template_dct:
+                c_d_eyes_lst = driving_template_dct['c_d_eyes_lst']
+            else:
+                c_d_eyes_lst = [np.array([[0.39]], dtype=np.float32)] * n_template_frames
+            if 'c_lip_lst' in driving_template_dct:
+                c_d_lip_lst = driving_template_dct['c_lip_lst']
+            elif 'c_d_lip_lst' in driving_template_dct:
+                c_d_lip_lst = driving_template_dct['c_d_lip_lst']
+            else:
+                c_d_lip_lst = [np.array([0.0], dtype=np.float32)] * n_template_frames
+            driving_n_frames = n_template_frames
             flag_is_driving_video = True if driving_n_frames > 1 else False
             if flag_is_source_video and flag_is_driving_video:
                 n_frames = min(len(source_rgb_lst), driving_n_frames)  # minimum number as the number of the animated frames
@@ -239,31 +308,44 @@ class LivePortraitPipeline(object):
                         x_d_r_lst_smooth = [torch.tensor(x_d_r[0], dtype=torch.float32, device=device) for x_d_r in x_d_r_lst]*n_frames
 
         else:  # if the input is a source image, process it only once
-            if inf_cfg.flag_do_crop:
-                crop_info = self.cropper.crop_source_image(source_rgb_lst[0], crop_cfg)
-                if crop_info is None:
-                    raise Exception("No face detected in the source image!")
-                source_lmk = crop_info['lmk_crop']
-                img_crop_256x256 = crop_info['img_crop_256x256']
+            if self._source_cache.get('source_path') == args.source:
+                log("Using precomputed source cache — skipping crop, F and M model inference.")
+                source_rgb_lst = [self._source_cache['source_rgb']]
+                source_lmk = self._source_cache['source_lmk']
+                img_crop_256x256 = self._source_cache['img_crop_256x256']
+                crop_info = self._source_cache['crop_info']
+                x_s_info = self._source_cache['x_s_info']
+                x_c_s = self._source_cache['x_c_s']
+                R_s = self._source_cache['R_s']
+                f_s = self._source_cache['f_s']
+                x_s = self._source_cache['x_s']
+                lip_delta_before_animation = self._source_cache['lip_delta_before_animation']
+                mask_ori_float = self._source_cache['mask_ori_float']
             else:
-                source_lmk = self.cropper.calc_lmk_from_cropped_image(source_rgb_lst[0])
-                img_crop_256x256 = cv2.resize(source_rgb_lst[0], (256, 256))  # force to resize to 256x256
-            I_s = self.live_portrait_wrapper.prepare_source(img_crop_256x256)
-            x_s_info = self.live_portrait_wrapper.get_kp_info(I_s)
-            x_c_s = x_s_info['kp']
-            R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
-            f_s = self.live_portrait_wrapper.extract_feature_3d(I_s)
-            x_s = self.live_portrait_wrapper.transform_keypoint(x_s_info)
+                if inf_cfg.flag_do_crop:
+                    crop_info = self.cropper.crop_source_image(source_rgb_lst[0], crop_cfg)
+                    if crop_info is None:
+                        raise Exception("No face detected in the source image!")
+                    source_lmk = crop_info['lmk_crop']
+                    img_crop_256x256 = crop_info['img_crop_256x256']
+                else:
+                    source_lmk = self.cropper.calc_lmk_from_cropped_image(source_rgb_lst[0])
+                    img_crop_256x256 = cv2.resize(source_rgb_lst[0], (256, 256))
+                I_s = self.live_portrait_wrapper.prepare_source(img_crop_256x256)
+                x_s_info = self.live_portrait_wrapper.get_kp_info(I_s)
+                x_c_s = x_s_info['kp']
+                R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
+                f_s = self.live_portrait_wrapper.extract_feature_3d(I_s)
+                x_s = self.live_portrait_wrapper.transform_keypoint(x_s_info)
 
-            # let lip-open scalar to be 0 at first
-            if flag_normalize_lip and inf_cfg.flag_relative_motion and source_lmk is not None:
-                c_d_lip_before_animation = [0.]
-                combined_lip_ratio_tensor_before_animation = self.live_portrait_wrapper.calc_combined_lip_ratio(c_d_lip_before_animation, source_lmk)
-                if combined_lip_ratio_tensor_before_animation[0][0] >= inf_cfg.lip_normalize_threshold:
-                    lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio_tensor_before_animation)
+                if flag_normalize_lip and inf_cfg.flag_relative_motion and source_lmk is not None:
+                    c_d_lip_before_animation = [0.]
+                    combined_lip_ratio_tensor_before_animation = self.live_portrait_wrapper.calc_combined_lip_ratio(c_d_lip_before_animation, source_lmk)
+                    if combined_lip_ratio_tensor_before_animation[0][0] >= inf_cfg.lip_normalize_threshold:
+                        lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio_tensor_before_animation)
 
-            if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
-                mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
+                if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
+                    mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
 
         ######## animate ########
         if flag_is_driving_video or (flag_is_source_video and not flag_is_driving_video):
@@ -451,36 +533,25 @@ class LivePortraitPipeline(object):
 
         mkdir(args.output_dir)
         wfp_concat = None
-        ######### build the final concatenation result #########
-        # driving frame | source frame | generation
-        if flag_is_source_video and flag_is_driving_video:
-            frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, img_crop_256x256_lst, I_p_lst)
-        elif flag_is_source_video and not flag_is_driving_video:
-            if flag_load_from_template:
-                frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, img_crop_256x256_lst, I_p_lst)
-            else:
-                frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst*n_frames, img_crop_256x256_lst, I_p_lst)
-        else:
-            frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, [img_crop_256x256], I_p_lst)
 
         if flag_is_driving_video or (flag_is_source_video and not flag_is_driving_video):
-            flag_source_has_audio = flag_is_source_video and has_audio_stream(args.source)
-            flag_driving_has_audio = (not flag_load_from_template) and has_audio_stream(args.driving)
-
-            wfp_concat = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_concat.mp4')
-
             # NOTE: update output fps
             output_fps = source_fps if flag_is_source_video else output_fps
-            images2video(frames_concatenated, wfp=wfp_concat, fps=output_fps)
 
-            if flag_source_has_audio or flag_driving_has_audio:
-                # final result with concatenation
-                wfp_concat_with_audio = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_concat_with_audio.mp4')
-                audio_from_which_video = args.driving if ((flag_driving_has_audio and args.audio_priority == 'driving') or (not flag_source_has_audio)) else args.source
-                log(f"Audio is selected from {audio_from_which_video}, concat mode")
-                add_audio_to_video(wfp_concat, audio_from_which_video, wfp_concat_with_audio)
-                os.replace(wfp_concat_with_audio, wfp_concat)
-                log(f"Replace {wfp_concat_with_audio} with {wfp_concat}")
+            ######### build the final concatenation result #########
+            if args.flag_save_concat:
+                if flag_is_source_video and flag_is_driving_video:
+                    frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, img_crop_256x256_lst, I_p_lst)
+                elif flag_is_source_video and not flag_is_driving_video:
+                    if flag_load_from_template:
+                        frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, img_crop_256x256_lst, I_p_lst)
+                    else:
+                        frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst*n_frames, img_crop_256x256_lst, I_p_lst)
+                else:
+                    frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, [img_crop_256x256], I_p_lst)
+
+                wfp_concat = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_concat.mp4')
+                images2video(frames_concatenated, wfp=wfp_concat, fps=output_fps)
 
             # save the animated result
             wfp = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}.mp4')
@@ -489,30 +560,26 @@ class LivePortraitPipeline(object):
             else:
                 images2video(I_p_lst, wfp=wfp, fps=output_fps)
 
-            ######### build the final result #########
-            if flag_source_has_audio or flag_driving_has_audio:
-                wfp_with_audio = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_with_audio.mp4')
-                audio_from_which_video = args.driving if ((flag_driving_has_audio and args.audio_priority == 'driving') or (not flag_source_has_audio)) else args.source
-                log(f"Audio is selected from {audio_from_which_video}")
-                add_audio_to_video(wfp, audio_from_which_video, wfp_with_audio)
-                os.replace(wfp_with_audio, wfp)
-                log(f"Replace {wfp_with_audio} with {wfp}")
-
             # final log
             if wfp_template not in (None, ''):
                 log(f'Animated template: {wfp_template}, you can specify `-d` argument with this template path next time to avoid cropping video, motion making and protecting privacy.', style='bold green')
             log(f'Animated video: {wfp}')
-            log(f'Animated video with concat: {wfp_concat}')
+            if wfp_concat:
+                log(f'Animated video with concat: {wfp_concat}')
         else:
-            wfp_concat = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_concat.jpg')
-            cv2.imwrite(wfp_concat, frames_concatenated[0][..., ::-1])
             wfp = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}.jpg')
             if I_p_pstbk_lst is not None and len(I_p_pstbk_lst) > 0:
                 cv2.imwrite(wfp, I_p_pstbk_lst[0][..., ::-1])
             else:
-                cv2.imwrite(wfp, frames_concatenated[0][..., ::-1])
+                cv2.imwrite(wfp, I_p_lst[0][..., ::-1])
+
+            if args.flag_save_concat:
+                frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, [img_crop_256x256], I_p_lst)
+                wfp_concat = osp.join(args.output_dir, f'{basename(args.source)}--{basename(args.driving)}_concat.jpg')
+                cv2.imwrite(wfp_concat, frames_concatenated[0][..., ::-1])
+                log(f'Animated image with concat: {wfp_concat}')
+
             # final log
             log(f'Animated image: {wfp}')
-            log(f'Animated image with concat: {wfp_concat}')
 
         return wfp, wfp_concat
