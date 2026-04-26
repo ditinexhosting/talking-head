@@ -224,73 +224,19 @@ def render_keyframes():
     return send_file(buf, mimetype="video/mp4", as_attachment=False)
 
 
-# ============================================================================
-# Example Rendering Endpoints
-# ============================================================================
-
-@app.get("/api/examples")
-def list_examples():
-    """List all available example animations."""
-    examples = [
-        {
-            "name": "head_movements",
-            "endpoint": "/api/render/head_movements",
-            "description": "Head nod, turn left/right, and tilt"
-        },
-        {
-            "name": "eye_movements",
-            "endpoint": "/api/render/eye_movements",
-            "description": "Look left, right, up, down, and blink"
-        },
-        {
-            "name": "eyebrows",
-            "endpoint": "/api/render/eyebrows",
-            "description": "Raise, lower, and angle eyebrows (surprise, angry, confused)"
-        },
-        {
-            "name": "mouth_expressions",
-            "endpoint": "/api/render/mouth_expressions",
-            "description": "Smile, frown, talk, pucker, and shift mouth"
-        },
-        {
-            "name": "talking",
-            "endpoint": "/api/render/talking",
-            "description": "Simple talking animation with mouth opening/closing cycles"
-        },
-        {
-            "name": "emotions",
-            "endpoint": "/api/render/emotions",
-            "description": "Emotion sequence: surprise → confusion → smile → sadness"
-        },
-        {
-            "name": "nose",
-            "endpoint": "/api/render/nose",
-            "description": "Nostril flare and nose wrinkle"
-        },
-        {
-            "name": "scale_and_translation",
-            "endpoint": "/api/render/scale_and_translation",
-            "description": "Move face closer/farther and shift position"
-        },
-        {
-            "name": "asymmetric_eyes",
-            "endpoint": "/api/render/asymmetric_eyes",
-            "description": "Wink and control each eye independently"
-        },
-    ]
-    return jsonify(examples)
 
 
-def _render_example_video(template_func):
-    """Helper to render an example video."""
+def _render_example_video(template_dct):
+    """Helper to render an example video from a pre-built motion template dict."""
+    if not isinstance(template_dct, dict):
+        return jsonify({"error": "Motion template must be a dict"}), 400
+
     if not os.path.exists(SOURCE_IMAGE):
         return jsonify({"error": f"Source image not found: {SOURCE_IMAGE}"}), 404
 
     pipeline = get_pipeline()
 
     with _infer_lock:
-        template_dct = template_func()
-
         tmp_pkl = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
         try:
             pickle.dump(template_dct, tmp_pkl)
@@ -319,4 +265,6 @@ def _render_example_video(template_func):
 @app.get("/api/render/test")
 def render_test_movements():
     """Render test movement example."""
-    return _render_example_video(keyframe_examples.listening_nod_with_smile)
+    end_frame, keyframes = keyframe_examples.talking_chin_up_movement()
+    motions = build_motion_from_keyframes(keyframes, n_frames=end_frame, fps=25)
+    return _render_example_video(motions)

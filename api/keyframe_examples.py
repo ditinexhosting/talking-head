@@ -16,7 +16,7 @@ from api.motion import Keyframe, build_motion_from_keyframes
 
 
 # ======================
-# Head movements
+# Listening movements
 # ======================
 
 # Listening nod with smile
@@ -33,6 +33,62 @@ def listening_nod_with_smile():
 
 
 # Listening nod with curiocity
+
+
+
+
+
+
+# ======================
+# Talking Head Movements
+# ======================
+
+def talking_left_side_head_movement(start_frame=0):
+    """Gesture: Move head sideways while talking."""
+    keyframes = [
+        Keyframe(frame_idx=start_frame + 0, yaw_deg=0),
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=6),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0)
+    ]
+    return start_frame + 20, keyframes
+
+def talking_right_side_head_movement(start_frame=0):
+    """Gesture: Move head sideways while talking."""
+    keyframes = [
+        Keyframe(frame_idx=start_frame + 0, yaw_deg=0),
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=-6),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0)
+    ]
+    return start_frame + 20, keyframes
+
+
+def talking_tilt_top_right_head_movement(start_frame=0):
+    """Gesture: Tilt head while talking."""
+    keyframes = [
+        Keyframe(frame_idx=start_frame + 0, yaw_deg=0, roll_deg=0, pitch_deg=0),
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=-2 , roll_deg=-5, pitch_deg=-1),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0, roll_deg=0, pitch_deg=0)
+    ]
+    return start_frame + 20, keyframes
+
+
+def talking_tilt_top_left_head_movement(start_frame=0):
+    """Gesture: Tilt head while talking."""
+    keyframes = [
+        Keyframe(frame_idx=start_frame + 0, yaw_deg=0, roll_deg=0, pitch_deg=0),
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=2 , roll_deg=5, pitch_deg=-1),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0, roll_deg=0, pitch_deg=0)
+    ]
+    return start_frame + 20, keyframes
+
+def talking_chin_up_movement(start_frame=0):
+    """Gesture: Tilt head while talking."""
+    keyframes = [
+        Keyframe(frame_idx=start_frame + 0, yaw_deg=0, roll_deg=0, pitch_deg=0),
+        Keyframe(frame_idx=start_frame + 10, yaw_deg=0 , roll_deg=0, pitch_deg=-7),
+        Keyframe(frame_idx=start_frame + 20, yaw_deg=0, roll_deg=0, pitch_deg=0)
+    ]
+    return start_frame + 20, keyframes
 
 # ============================================================================
 # Example 1: Simple head movements
