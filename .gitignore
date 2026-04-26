@@ -19,6 +19,7 @@ pretrained_weights/liveportrait_animals
 
 # Temporary files or benchmark resources
 animations/*
+output/
 tmp/*
 .vscode/launch.json
 **/*.DS_Store
