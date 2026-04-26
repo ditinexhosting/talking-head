@@ -1,397 +1,322 @@
 # coding: utf-8
 
-import copy
-import os
-import subprocess
 import sys
-import tempfile
+import io
+import os
+import pickle
 import threading
+import tempfile
 from pathlib import Path
-from typing import Optional
 
-import cv2
-import numpy as np
-from flask import Flask, Response, jsonify, request
+from flask import Flask, jsonify, send_file, request
+from api.motion import build_motion_template, build_motion_from_keyframes, Keyframe
+from api import keyframe_examples
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-os.chdir(str(ROOT))  # pipeline uses relative imports for resources
-
-SOURCE_IMAGE = str(ROOT / "assets/my_photo.png")
-TALKING_VIDEO = str(ROOT / "assets/talking.mp4")
-TALKING_TEMPLATE = str(ROOT / "assets/talking.pkl")
-OUTPUT_DIR = str(ROOT / "output")
-DEFAULT_ANIMATION_DURATION_SECONDS = 5.0
-
-DEFAULT_LIPSYNC_TEXT = (
-    "Hello, and welcome to our session today, it is a pleasure to meet you. "
-    "I am looking forward to learning more about your professional journey and discussing "
-    "how your skills align with our company's mission."
-)
-LIP_EXPRESSION_INDICES = [6, 12, 14, 17, 19, 20]
-
-from src.config.argument_config import ArgumentConfig
-from src.config.crop_config import CropConfig
-from src.config.inference_config import InferenceConfig
-from src.live_portrait_pipeline import LivePortraitPipeline
-from src.utils.helper import is_square_video
-from src.utils.io import dump, load, load_video
-from src.utils.video import get_fps
 
 app = Flask(__name__)
 
-_pipeline: Optional[LivePortraitPipeline] = None
-_init_lock = threading.Lock()
-_template_lock = threading.Lock()
-_inference_lock = threading.Lock()
+_pipeline = None
+_pipeline_lock = threading.Lock()
+_infer_lock = threading.Lock()
+
+SOURCE_IMAGE = str(ROOT / "assets" / "my_photo.png")
 
 
-def get_pipeline() -> LivePortraitPipeline:
-    """Load and cache LivePortrait models for optional startup preloading."""
+def get_pipeline():
     global _pipeline
-
     if _pipeline is None:
-        with _init_lock:
+        with _pipeline_lock:
             if _pipeline is None:
-                app.logger.info("Loading LivePortrait models...")
+                from src.config.inference_config import InferenceConfig
+                from src.config.crop_config import CropConfig
+                from src.live_portrait_pipeline import LivePortraitPipeline
+
                 _pipeline = LivePortraitPipeline(
                     inference_cfg=InferenceConfig(),
                     crop_cfg=CropConfig(),
                 )
-                _pipeline.precompute_source(SOURCE_IMAGE)
-                app.logger.info("LivePortrait models ready.")
-
+                if os.path.exists(SOURCE_IMAGE):
+                    _pipeline.precompute_source(SOURCE_IMAGE)
     return _pipeline
 
 
-def neutralize_template_lips(template: dict, neutral_exp) -> dict:
-    """Freeze lip/mouth expression channels while preserving all other motion.
-
-    The template keeps the original head pose, translation, scale, eye motion,
-    and non-lip expression values. Only the mouth/lip expression keypoints are
-    replaced with LivePortrait's neutral lip baseline.
-    """
-    first_exp = template["motion"][0]["exp"]
-    neutral_exp = np.asarray(neutral_exp, dtype=first_exp.dtype)
-    if neutral_exp.ndim == 2:
-        neutral_exp = neutral_exp[None, ...]
-
-    neutral_lips = neutral_exp[:, LIP_EXPRESSION_INDICES, :]
-    for motion in template["motion"]:
-        motion["exp"] = motion["exp"].copy()
-        motion["exp"][:, LIP_EXPRESSION_INDICES, :] = neutral_lips
-
-    n_frames = template["n_frames"]
-    neutral_lip_ratio = np.array([0.0], dtype=np.float32)
-    template["c_lip_lst"] = [neutral_lip_ratio.copy() for _ in range(n_frames)]
-    template["c_d_lip_lst"] = [neutral_lip_ratio.copy() for _ in range(n_frames)]
-    return template
-
-
-def create_duration_template(
-    template_path: str,
-    output_path: str,
-    duration_seconds: float,
-) -> str:
-    """Create a duration-specific copy of a motion template without mutating it.
-
-    The template duration is controlled by resampling frame-level template lists.
-    Shorter durations are compressed/truncated by sampling fewer frames; longer
-    durations are stretched by sampling repeated/interpolated frame positions.
-    """
-    if duration_seconds <= 0:
-        raise ValueError("duration_seconds must be greater than 0")
-
-    template = load(template_path)
-    source_frames = int(template["n_frames"])
-    if source_frames <= 0:
-        raise ValueError(f"Template has no frames: {template_path}")
-
-    output_fps = int(template.get("output_fps", 25))
-    target_frames = max(1, int(round(duration_seconds * output_fps)))
-    frame_indices = np.rint(
-        np.linspace(0, source_frames - 1, target_frames)
-    ).astype(int)
-
-    duration_template = copy.deepcopy(template)
-    duration_template["n_frames"] = target_frames
-
-    for key in ("motion", "c_eyes_lst", "c_lip_lst", "c_d_eyes_lst", "c_d_lip_lst"):
-        value = template.get(key)
-        if isinstance(value, list) and len(value) == source_frames:
-            duration_template[key] = [copy.deepcopy(value[idx]) for idx in frame_indices]
-
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    dump(str(output), duration_template)
-    return str(output)
-
-
-def generate_talking_template(
-    video_path: str = TALKING_VIDEO,
-    output_path: str = TALKING_TEMPLATE,
-) -> str:
-    """Generate a LivePortrait .pkl motion template from assets/female.mp4 with neutral lips."""
-    video = Path(video_path)
-    if not video.exists():
-        raise FileNotFoundError(f"Driving video not found: {video}")
-
-    pipeline = get_pipeline()
-    inf_cfg = pipeline.live_portrait_wrapper.inference_cfg
-
-    output_fps = int(get_fps(str(video)))
-    app.logger.info("Loading driving video from %s at %s FPS", video, output_fps)
-    driving_rgb_lst = load_video(str(video))
-
-    if inf_cfg.flag_crop_driving_video or not is_square_video(str(video)):
-        ret_d = pipeline.cropper.crop_driving_video(driving_rgb_lst)
-        driving_rgb_crop_lst = ret_d["frame_crop_lst"]
-        driving_lmk_crop_lst = ret_d["lmk_crop_lst"]
-        app.logger.info("Cropped %s driving frames", len(driving_rgb_crop_lst))
-    else:
-        driving_rgb_crop_lst = driving_rgb_lst
-        driving_lmk_crop_lst = pipeline.cropper.calc_lmks_from_cropped_video(driving_rgb_lst)
-
-    driving_rgb_crop_256x256_lst = [
-        cv2.resize(frame, (256, 256)) for frame in driving_rgb_crop_lst
-    ]
-    c_d_eyes_lst, c_d_lip_lst = pipeline.live_portrait_wrapper.calc_ratio(
-        driving_lmk_crop_lst
-    )
-    I_d_lst = pipeline.live_portrait_wrapper.prepare_videos(driving_rgb_crop_256x256_lst)
-    template = pipeline.make_motion_template(
-        I_d_lst,
-        c_d_eyes_lst,
-        c_d_lip_lst,
-        output_fps=output_fps,
-    )
-    template = neutralize_template_lips(template, neutral_exp=inf_cfg.lip_array)
-
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    dump(str(output), template)
-    app.logger.info("Saved talking motion template to %s", output)
-    return str(output)
-
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health():
-    return jsonify({
-        "status": "ok",
-        "model_loaded": _pipeline is not None,
-    })
+    return jsonify({"status": "ok", "model_loaded": _pipeline is not None})
 
 
-@app.post("/api/generate-talking-template")
-def generate_talking_template_endpoint():
-    """Create assets/female.pkl from assets/female.mp4."""
-    try:
-        with _template_lock:
-            template_path = generate_talking_template()
-    except Exception as exc:
-        app.logger.exception("Failed to generate talking template")
-        return jsonify({
-            "status": "error",
-            "message": str(exc),
-        }), 500
-
-    return jsonify({
-        "status": "ok",
-        "template": template_path,
-    })
+@app.post("/api/warmup")
+def warmup():
+    get_pipeline()
+    return jsonify({"status": "ok", "message": "models loaded"})
 
 
-@app.post("/api/animate")
-def animate():
-    """Animate SOURCE_IMAGE and return an MP4 with the requested duration.
-
-    JSON body options:
-        {"duration_seconds": 5}
-        {"duration": 7.5}
+@app.post("/api/render")
+def render():
     """
-    try:
-        if not Path(SOURCE_IMAGE).exists():
-            raise FileNotFoundError(f"Source image not found: {SOURCE_IMAGE}")
+    Render a video of assets/my_photo.png driven by a hardcoded synthetic
+    motion template (expression + head pose + eye blinks + lip sync).
 
-        if not Path(TALKING_TEMPLATE).exists():
-            app.logger.info("Driving template missing; generating %s", TALKING_TEMPLATE)
-            with _template_lock:
-                if not Path(TALKING_TEMPLATE).exists():
-                    generate_talking_template()
+    Returns video/mp4 streamed directly — nothing is written to disk permanently.
 
-        request_data = request.get_json(silent=True) or {}
-        duration_seconds = float(
-            request_data.get(
-                "duration_seconds",
-                request_data.get("duration", DEFAULT_ANIMATION_DURATION_SECONDS),
-            )
-        )
-
-        output_dir = Path(OUTPUT_DIR)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        duration_token = str(duration_seconds).replace(".", "p")
-        duration_template = output_dir / f"female_{duration_token}s.pkl"
-        create_duration_template(
-            template_path=TALKING_TEMPLATE,
-            output_path=str(duration_template),
-            duration_seconds=duration_seconds,
-        )
-
-        pipeline = get_pipeline()
-        args = ArgumentConfig(
-            source=SOURCE_IMAGE,
-            driving=str(duration_template),
-            output_dir=OUTPUT_DIR,
-            flag_save_concat=False,
-        )
-
-        with _inference_lock:
-            video_path, _ = pipeline.execute(args)
-
-        video_file = Path(video_path)
-        if not video_file.exists():
-            raise FileNotFoundError(f"Generated video not found: {video_file}")
-
-        video_bytes = video_file.read_bytes()
-
-    except Exception as exc:
-        app.logger.exception("Failed to animate portrait")
-        return jsonify({
-            "status": "error",
-            "message": str(exc),
-        }), 500
-
-    return Response(
-        video_bytes,
-        mimetype="video/mp4",
-        headers={
-            "Content-Disposition": f"inline; filename={video_file.name}",
-            "Content-Length": str(len(video_bytes)),
-            "X-Output-Path": str(video_file.resolve()),
-            "X-Duration-Seconds": str(duration_seconds),
-        },
-    )
-
-
-def _text_to_wav(text: str, output_wav: str) -> str:
-    """Convert *text* to a 16-kHz mono WAV using gTTS + ffmpeg."""
-    from gtts import gTTS
-
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-        mp3_path = tmp.name
-
-    gTTS(text=text, lang="en", slow=False).save(mp3_path)
-
-    try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-v", "warning",
-                "-i", mp3_path,
-                "-ar", "16000",
-                "-ac", "1",
-                output_wav,
-            ],
-            check=True,
-        )
-    finally:
-        os.unlink(mp3_path)
-
-    return output_wav
-
-
-@app.post("/api/animate-with-lipsync")
-def animate_with_lipsync():
-    """Generate a lip-synced talking-head video.
-
-    Runs LivePortrait to animate the source image, synthesises speech from
-    the hardcoded greeting text via gTTS, then applies MuseTalk lip-sync
-    so the mouth matches the audio.
-
-    JSON body options (same as /api/animate):
-        {"duration_seconds": 5}
-        {"text": "Custom text to speak"}   # optional override
+    Optional JSON body:
+      {
+        "n_frames": 150,   // number of frames (default 150 = 6 s at 25 fps)
+        "fps": 25
+      }
     """
-    try:
-        from api.musetalk_lipsync import apply_lipsync
+    body = request.get_json(silent=True) or {}
+    n_frames = max(10, min(int(body.get("n_frames", 150)), 600))
+    fps = max(10, min(int(body.get("fps", 25)), 60))
 
-        if not Path(SOURCE_IMAGE).exists():
-            raise FileNotFoundError(f"Source image not found: {SOURCE_IMAGE}")
+    if not os.path.exists(SOURCE_IMAGE):
+        return jsonify({"error": f"Source image not found: {SOURCE_IMAGE}"}), 404
 
-        if not Path(TALKING_TEMPLATE).exists():
-            app.logger.info("Driving template missing; generating %s", TALKING_TEMPLATE)
-            with _template_lock:
-                if not Path(TALKING_TEMPLATE).exists():
-                    generate_talking_template()
+    pipeline = get_pipeline()
 
-        request_data = request.get_json(silent=True) or {}
-        duration_seconds = float(
-            request_data.get(
-                "duration_seconds",
-                request_data.get("duration", DEFAULT_ANIMATION_DURATION_SECONDS),
-            )
-        )
-        text = request_data.get("text", DEFAULT_LIPSYNC_TEXT)
+    with _infer_lock:
+        template_dct = build_motion_template(n_frames=n_frames, fps=fps)
 
-        # ── Step 1: Generate LivePortrait animated video ──────────────────
-        output_dir = Path(OUTPUT_DIR)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        duration_token = str(duration_seconds).replace(".", "p")
-        duration_template = output_dir / f"female_{duration_token}s.pkl"
-        create_duration_template(
-            template_path=TALKING_TEMPLATE,
-            output_path=str(duration_template),
-            duration_seconds=duration_seconds,
-        )
+        tmp_pkl = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
+        try:
+            pickle.dump(template_dct, tmp_pkl)
+            tmp_pkl.close()
 
-        pipeline = get_pipeline()
-        args = ArgumentConfig(
-            source=SOURCE_IMAGE,
-            driving=str(duration_template),
-            output_dir=OUTPUT_DIR,
-            flag_save_concat=False,
-        )
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                from src.config.argument_config import ArgumentConfig
+                args = ArgumentConfig(
+                    source=SOURCE_IMAGE,
+                    driving=tmp_pkl.name,
+                    output_dir=tmp_dir,
+                    flag_save_concat=False,
+                )
+                wfp, _ = pipeline.execute(args)
 
-        with _inference_lock:
-            lp_video_path, _ = pipeline.execute(args)
+                buf = io.BytesIO()
+                with open(wfp, "rb") as f:
+                    buf.write(f.read())
+                buf.seek(0)
+        finally:
+            os.unlink(tmp_pkl.name)
 
-        lp_video_file = Path(lp_video_path)
-        if not lp_video_file.exists():
-            raise FileNotFoundError(f"LivePortrait video not found: {lp_video_file}")
+    return send_file(buf, mimetype="video/mp4", as_attachment=False)
 
-        app.logger.info("LivePortrait video: %s", lp_video_file)
 
-        # ── Step 2: Text → speech ─────────────────────────────────────────
-        wav_path = str(output_dir / "tts_speech.wav")
-        _text_to_wav(text, wav_path)
-        app.logger.info("TTS audio: %s", wav_path)
+@app.post("/api/render_keyframes")
+def render_keyframes():
+    """
+    Render a video from keyframes with smooth interpolation.
 
-        # ── Step 3: MuseTalk lip-sync ──────────────────────────────────────
-        lipsync_out = str(output_dir / f"lipsync_{lp_video_file.stem}.mp4")
-        with _inference_lock:
-            apply_lipsync(
-                video_path=str(lp_video_file),
-                audio_path=wav_path,
-                output_path=lipsync_out,
-            )
+    JSON body:
+      {
+        "keyframes": [
+          {
+            "frame_idx": 0,
+            "pitch_deg": 0, "yaw_deg": 0, "roll_deg": 0,
+            "scale": 1.393,
+            "tx": 0.0, "ty": 0.1, "tz": 0.0,
+            "eye_open_left": 0.30, "eye_open_right": 0.30,
+            "eye_gaze_x": 0, "eye_gaze_y": 0,
+            "brow_raise_left": 0, "brow_raise_right": 0,
+            "mouth_open": 0, "mouth_smile": 0
+          },
+          {
+            "frame_idx": 25,
+            "pitch_deg": -5,
+            "eye_open_left": 0.10, "eye_open_right": 0.10,
+            "brow_raise_left": 0.5, "brow_raise_right": 0.5,
+            "mouth_open": 0.3, "mouth_smile": 0.7
+          },
+          ...
+        ],
+        "n_frames": 150,
+        "fps": 25
+      }
 
-        video_file = Path(lipsync_out)
-        if not video_file.exists():
-            raise FileNotFoundError(f"Lip-synced video not found: {video_file}")
+    Full keyframe parameters:
+      - Head: pitch_deg, yaw_deg, roll_deg, scale, tx, ty, tz
+      - Eyes: eye_open_left, eye_open_right, eye_gaze_x, eye_gaze_y
+      - Eyebrows: brow_raise_left, brow_raise_right, brow_inner_raise, brow_angle_left, brow_angle_right
+      - Mouth: mouth_open, mouth_smile, mouth_pucker, mouth_x, mouth_y
+      - Nose: nose_x, nose_y
 
-        video_bytes = video_file.read_bytes()
+    Returns video/mp4 streamed directly.
+    """
+    body = request.get_json(silent=True) or {}
+    n_frames = max(10, min(int(body.get("n_frames", 150)), 600))
+    fps = max(10, min(int(body.get("fps", 25)), 60))
 
-    except Exception as exc:
-        app.logger.exception("Failed to animate with lip-sync")
-        return jsonify({"status": "error", "message": str(exc)}), 500
+    keyframes_data = body.get("keyframes", [])
+    if not keyframes_data:
+        return jsonify({"error": "No keyframes provided"}), 400
 
-    return Response(
-        video_bytes,
-        mimetype="video/mp4",
-        headers={
-            "Content-Disposition": f"inline; filename={video_file.name}",
-            "Content-Length": str(len(video_bytes)),
-            "X-Output-Path": str(video_file.resolve()),
-            "X-Duration-Seconds": str(duration_seconds),
-            "X-Text": text[:200],
+    # Convert dicts to Keyframe objects
+    keyframes = []
+    for kf_dict in keyframes_data:
+        keyframes.append(Keyframe(
+            frame_idx=int(kf_dict["frame_idx"]),
+            # Head pose & scale
+            pitch_deg=float(kf_dict.get("pitch_deg", 0.0)),
+            yaw_deg=float(kf_dict.get("yaw_deg", 0.0)),
+            roll_deg=float(kf_dict.get("roll_deg", 0.0)),
+            scale=float(kf_dict.get("scale", 1.393)),
+            tx=float(kf_dict.get("tx", 0.0)),
+            ty=float(kf_dict.get("ty", 0.10)),
+            tz=float(kf_dict.get("tz", 0.0)),
+            # Eye control
+            eye_open_left=float(kf_dict.get("eye_open_left", 0.30)),
+            eye_open_right=float(kf_dict.get("eye_open_right", 0.30)),
+            eye_gaze_x=float(kf_dict.get("eye_gaze_x", 0.0)),
+            eye_gaze_y=float(kf_dict.get("eye_gaze_y", 0.0)),
+            # Eyebrow control
+            brow_raise_left=float(kf_dict.get("brow_raise_left", 0.0)),
+            brow_raise_right=float(kf_dict.get("brow_raise_right", 0.0)),
+            brow_inner_raise=float(kf_dict.get("brow_inner_raise", 0.0)),
+            brow_angle_left=float(kf_dict.get("brow_angle_left", 0.0)),
+            brow_angle_right=float(kf_dict.get("brow_angle_right", 0.0)),
+            # Mouth control
+            mouth_open=float(kf_dict.get("mouth_open", 0.0)),
+            mouth_smile=float(kf_dict.get("mouth_smile", 0.0)),
+            mouth_pucker=float(kf_dict.get("mouth_pucker", 0.0)),
+            mouth_x=float(kf_dict.get("mouth_x", 0.0)),
+            mouth_y=float(kf_dict.get("mouth_y", 0.0)),
+            # Nose control
+            nose_x=float(kf_dict.get("nose_x", 0.0)),
+            nose_y=float(kf_dict.get("nose_y", 0.0)),
+        ))
+
+    if not os.path.exists(SOURCE_IMAGE):
+        return jsonify({"error": f"Source image not found: {SOURCE_IMAGE}"}), 404
+
+    pipeline = get_pipeline()
+
+    with _infer_lock:
+        template_dct = build_motion_from_keyframes(keyframes, n_frames=n_frames, fps=fps)
+
+        tmp_pkl = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
+        try:
+            pickle.dump(template_dct, tmp_pkl)
+            tmp_pkl.close()
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                from src.config.argument_config import ArgumentConfig
+                args = ArgumentConfig(
+                    source=SOURCE_IMAGE,
+                    driving=tmp_pkl.name,
+                    output_dir=tmp_dir,
+                    flag_save_concat=False,
+                )
+                wfp, _ = pipeline.execute(args)
+
+                buf = io.BytesIO()
+                with open(wfp, "rb") as f:
+                    buf.write(f.read())
+                buf.seek(0)
+        finally:
+            os.unlink(tmp_pkl.name)
+
+    return send_file(buf, mimetype="video/mp4", as_attachment=False)
+
+
+# ============================================================================
+# Example Rendering Endpoints
+# ============================================================================
+
+@app.get("/api/examples")
+def list_examples():
+    """List all available example animations."""
+    examples = [
+        {
+            "name": "head_movements",
+            "endpoint": "/api/render/head_movements",
+            "description": "Head nod, turn left/right, and tilt"
         },
-    )
+        {
+            "name": "eye_movements",
+            "endpoint": "/api/render/eye_movements",
+            "description": "Look left, right, up, down, and blink"
+        },
+        {
+            "name": "eyebrows",
+            "endpoint": "/api/render/eyebrows",
+            "description": "Raise, lower, and angle eyebrows (surprise, angry, confused)"
+        },
+        {
+            "name": "mouth_expressions",
+            "endpoint": "/api/render/mouth_expressions",
+            "description": "Smile, frown, talk, pucker, and shift mouth"
+        },
+        {
+            "name": "talking",
+            "endpoint": "/api/render/talking",
+            "description": "Simple talking animation with mouth opening/closing cycles"
+        },
+        {
+            "name": "emotions",
+            "endpoint": "/api/render/emotions",
+            "description": "Emotion sequence: surprise → confusion → smile → sadness"
+        },
+        {
+            "name": "nose",
+            "endpoint": "/api/render/nose",
+            "description": "Nostril flare and nose wrinkle"
+        },
+        {
+            "name": "scale_and_translation",
+            "endpoint": "/api/render/scale_and_translation",
+            "description": "Move face closer/farther and shift position"
+        },
+        {
+            "name": "asymmetric_eyes",
+            "endpoint": "/api/render/asymmetric_eyes",
+            "description": "Wink and control each eye independently"
+        },
+    ]
+    return jsonify(examples)
+
+
+def _render_example_video(template_func):
+    """Helper to render an example video."""
+    if not os.path.exists(SOURCE_IMAGE):
+        return jsonify({"error": f"Source image not found: {SOURCE_IMAGE}"}), 404
+
+    pipeline = get_pipeline()
+
+    with _infer_lock:
+        template_dct = template_func()
+
+        tmp_pkl = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
+        try:
+            pickle.dump(template_dct, tmp_pkl)
+            tmp_pkl.close()
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                from src.config.argument_config import ArgumentConfig
+                args = ArgumentConfig(
+                    source=SOURCE_IMAGE,
+                    driving=tmp_pkl.name,
+                    output_dir=tmp_dir,
+                    flag_save_concat=False,
+                )
+                wfp, _ = pipeline.execute(args)
+
+                buf = io.BytesIO()
+                with open(wfp, "rb") as f:
+                    buf.write(f.read())
+                buf.seek(0)
+        finally:
+            os.unlink(tmp_pkl.name)
+
+    return send_file(buf, mimetype="video/mp4", as_attachment=False)
+
+
+@app.get("/api/render/test")
+def render_test_movements():
+    """Render test movement example."""
+    return _render_example_video(keyframe_examples.listening_nod_with_smile)
