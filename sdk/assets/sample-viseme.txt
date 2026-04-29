@@ -1,0 +1,518 @@
+{
+    "session_id": "0d9407e3-f63c-4cd5-8ca0-600bb6eee993",
+    "event": "audio",
+    "sample_rate": 24000,
+    "encoding": "pcm_s16le",
+    "data":"",
+    "visemes": [
+        {
+            "start": 0.0,
+            "end": 0.01,
+            "duration": 0.01,
+            "viseme": "X",
+            "description": "Silence / rest"
+        },
+        {
+            "start": 0.01,
+            "end": 0.05,
+            "duration": 0.04,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.05,
+            "end": 0.09,
+            "duration": 0.04,
+            "viseme": "G",
+            "description": "Relaxed open mouth  (a, i)"
+        },
+        {
+            "start": 0.09,
+            "end": 0.16,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 0.16,
+            "end": 0.51,
+            "duration": 0.35,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 0.51,
+            "end": 0.58,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 0.58,
+            "end": 0.65,
+            "duration": 0.07,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.65,
+            "end": 0.72,
+            "duration": 0.07,
+            "viseme": "F",
+            "description": "Rounded / puckered lips  (w, q)"
+        },
+        {
+            "start": 0.72,
+            "end": 0.79,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 0.79,
+            "end": 0.93,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.93,
+            "end": 1.01,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 1.01,
+            "end": 1.38,
+            "duration": 0.37,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 1.38,
+            "end": 1.45,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 1.45,
+            "end": 1.73,
+            "duration": 0.28,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 1.73,
+            "end": 1.94,
+            "duration": 0.21,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 1.94,
+            "end": 2.08,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.08,
+            "end": 2.34,
+            "duration": 0.26,
+            "viseme": "X",
+            "description": "Silence / rest"
+        },
+        {
+            "start": 2.34,
+            "end": 2.53,
+            "duration": 0.19,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.53,
+            "end": 2.61,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 2.61,
+            "end": 2.83,
+            "duration": 0.22,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 2.83,
+            "end": 3.11,
+            "duration": 0.28,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 3.11,
+            "end": 3.19,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 3.19,
+            "end": 3.61,
+            "duration": 0.42,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 3.61,
+            "end": 3.66,
+            "duration": 0.05,
+            "viseme": "X",
+            "description": "Silence / rest"
+        }
+    ]
+}
+
+
+
+
+
+
+
+
+
+
+{
+    "session_id": "0d9407e3-f63c-4cd5-8ca0-600bb6eee993",
+    "event": "audio",
+    "sample_rate": 24000,
+    "encoding": "pcm_s16le",
+    "data": "",
+    "visemes": [
+        {
+            "start": 0.0,
+            "end": 0.01,
+            "duration": 0.01,
+            "viseme": "X",
+            "description": "Silence / rest"
+        },
+        {
+            "start": 0.01,
+            "end": 0.2,
+            "duration": 0.19,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.2,
+            "end": 0.28,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 0.28,
+            "end": 0.54,
+            "duration": 0.26,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.54,
+            "end": 0.68,
+            "duration": 0.14,
+            "viseme": "G",
+            "description": "Relaxed open mouth  (a, i)"
+        },
+        {
+            "start": 0.68,
+            "end": 0.75,
+            "duration": 0.07,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 0.75,
+            "end": 0.82,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 0.82,
+            "end": 0.89,
+            "duration": 0.07,
+            "viseme": "F",
+            "description": "Rounded / puckered lips  (w, q)"
+        },
+        {
+            "start": 0.89,
+            "end": 0.96,
+            "duration": 0.07,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 0.96,
+            "end": 1.17,
+            "duration": 0.21,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 1.17,
+            "end": 1.31,
+            "duration": 0.14,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 1.31,
+            "end": 1.45,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 1.45,
+            "end": 1.53,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 1.53,
+            "end": 1.65,
+            "duration": 0.12,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 1.65,
+            "end": 1.79,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 1.79,
+            "end": 1.93,
+            "duration": 0.14,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 1.93,
+            "end": 2.07,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.07,
+            "end": 2.19,
+            "duration": 0.12,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 2.19,
+            "end": 2.25,
+            "duration": 0.06,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.25,
+            "end": 2.38,
+            "duration": 0.13,
+            "viseme": "G",
+            "description": "Relaxed open mouth  (a, i)"
+        },
+        {
+            "start": 2.38,
+            "end": 2.45,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 2.45,
+            "end": 2.59,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.59,
+            "end": 2.66,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 2.66,
+            "end": 2.73,
+            "duration": 0.07,
+            "viseme": "H",
+            "description": "Wide open mouth  (short a, e)"
+        },
+        {
+            "start": 2.73,
+            "end": 2.8,
+            "duration": 0.07,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 2.8,
+            "end": 2.94,
+            "duration": 0.14,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 2.94,
+            "end": 3.15,
+            "duration": 0.21,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 3.15,
+            "end": 3.5,
+            "duration": 0.35,
+            "viseme": "X",
+            "description": "Silence / rest"
+        },
+        {
+            "start": 3.5,
+            "end": 3.75,
+            "duration": 0.25,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 3.75,
+            "end": 3.96,
+            "duration": 0.21,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 3.96,
+            "end": 4.1,
+            "duration": 0.14,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 4.1,
+            "end": 4.31,
+            "duration": 0.21,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 4.31,
+            "end": 4.38,
+            "duration": 0.07,
+            "viseme": "E",
+            "description": "Tongue up  (l)"
+        },
+        {
+            "start": 4.38,
+            "end": 4.45,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 4.45,
+            "end": 4.94,
+            "duration": 0.49,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 4.94,
+            "end": 5.01,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 5.01,
+            "end": 5.15,
+            "duration": 0.14,
+            "viseme": "H",
+            "description": "Wide open mouth  (short a, e)"
+        },
+        {
+            "start": 5.15,
+            "end": 5.22,
+            "duration": 0.07,
+            "viseme": "D",
+            "description": "Tongue behind upper teeth  (th)"
+        },
+        {
+            "start": 5.22,
+            "end": 5.29,
+            "duration": 0.07,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 5.29,
+            "end": 5.78,
+            "duration": 0.49,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 5.78,
+            "end": 5.86,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 5.86,
+            "end": 6.14,
+            "duration": 0.28,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 6.14,
+            "end": 6.22,
+            "duration": 0.08,
+            "viseme": "A",
+            "description": "Closed lips  (m, b, p)"
+        },
+        {
+            "start": 6.22,
+            "end": 6.26,
+            "duration": 0.04,
+            "viseme": "C",
+            "description": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)"
+        },
+        {
+            "start": 6.26,
+            "end": 6.58,
+            "duration": 0.32,
+            "viseme": "B",
+            "description": "Upper teeth on lower lip  (f, v)"
+        },
+        {
+            "start": 6.58,
+            "end": 6.63,
+            "duration": 0.05,
+            "viseme": "X",
+            "description": "Silence / rest"
+        }
+    ]
+}
