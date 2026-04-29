@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket
-from controllers.ws_controller import WebSocketConnection
+from controllers.ws import WebSocketConnection
 
 router = APIRouter(tags=["websocket"])
 

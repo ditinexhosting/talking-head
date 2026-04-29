@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from controllers.rest_controller import get_root, get_health
+from controllers.rest import get_root, get_health
 
 router = APIRouter(prefix="/api", tags=["rest"])
 

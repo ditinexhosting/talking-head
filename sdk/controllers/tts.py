@@ -8,7 +8,7 @@ import numpy as np
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from controllers.ws_controller import WebSocketConnection
+    from controllers.ws import WebSocketConnection
 
 _ASSETS = Path(__file__).parent.parent / "assets"
 _MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
