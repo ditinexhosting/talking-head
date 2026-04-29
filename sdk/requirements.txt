@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+uvloop
+websockets
+watchfiles
+python-dotenv
+pydantic
+kokoro-onnx
+numpy
