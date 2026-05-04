@@ -7,7 +7,7 @@ import tempfile
 import threading
 from flask import Blueprint, Response
 from api.pipeline import get_pipeline
-from api.utils.motion import add_blinks, build_template, neutral_keyframes
+from api.utils.motion import add_blinks, add_talks, build_template, neutral_keyframes
 from src.config.argument_config import ArgumentConfig
 
 keyframes_bp = Blueprint("keyframes", __name__)
@@ -18,11 +18,39 @@ _SOURCE = osp.join(_UPLOADS, "my_photo.png")
 _FPS = 25
 _PIPELINE_LOCK = threading.Lock()
 
+_VISEME_SEQUENCE = [
+    {"start": 0.00, "end": 0.01, "viseme": "X"},
+    {"start": 0.01, "end": 0.05, "viseme": "B"},
+    {"start": 0.05, "end": 0.09, "viseme": "G"},
+    {"start": 0.09, "end": 0.16, "viseme": "C"},
+    {"start": 0.16, "end": 0.51, "viseme": "E"},
+    {"start": 0.51, "end": 0.58, "viseme": "C"},
+    {"start": 0.58, "end": 0.65, "viseme": "B"},
+    {"start": 0.65, "end": 0.72, "viseme": "F"},
+    {"start": 0.72, "end": 0.79, "viseme": "C"},
+    {"start": 0.79, "end": 0.93, "viseme": "B"},
+    {"start": 0.93, "end": 1.01, "viseme": "A"},
+    {"start": 1.01, "end": 1.38, "viseme": "B"},
+    {"start": 1.38, "end": 1.45, "viseme": "C"},
+    {"start": 1.45, "end": 1.73, "viseme": "B"},
+    {"start": 1.73, "end": 1.94, "viseme": "C"},
+    {"start": 1.94, "end": 2.08, "viseme": "B"},
+    {"start": 2.08, "end": 2.34, "viseme": "X"},
+    {"start": 2.34, "end": 2.53, "viseme": "B"},
+    {"start": 2.53, "end": 2.61, "viseme": "A"},
+    {"start": 2.61, "end": 2.83, "viseme": "C"},
+    {"start": 2.83, "end": 3.11, "viseme": "B"},
+    {"start": 3.11, "end": 3.19, "viseme": "A"},
+    {"start": 3.19, "end": 3.61, "viseme": "B"},
+    {"start": 3.61, "end": 3.66, "viseme": "X"},
+]
+
 
 @keyframes_bp.post("/animate/keyframes")
 def animate_keyframes():
     keyframes = neutral_keyframes(seconds=2, fps=_FPS)
     keyframes = add_blinks(keyframes, fps=_FPS)
+    keyframes = add_talks(keyframes, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)
 
     json_path = osp.join(_UPLOADS, "blink_only_motion.json")
@@ -47,15 +75,8 @@ def animate_keyframes():
         pipeline = get_pipeline()
         inf_cfg = pipeline.live_portrait_wrapper.inference_cfg
 
-        # Enable eye retargeting so c_eyes_lst=[0,0] drives the retargeting
-        # network to close the eyes; restore original value after the call.
         with _PIPELINE_LOCK:
-            prev = inf_cfg.flag_eye_retargeting
-            inf_cfg.flag_eye_retargeting = True
-            try:
-                wfp, _ = pipeline.execute(args)
-            finally:
-                inf_cfg.flag_eye_retargeting = prev
+            wfp, _ = pipeline.execute(args)
 
         with open(wfp, "rb") as f:
             video_bytes = f.read()

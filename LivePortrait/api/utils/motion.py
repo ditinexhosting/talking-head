@@ -6,17 +6,24 @@ _EXP_DIM = 63  # 21 keypoints × 3 coords
 
 
 class Keyframe:
-    def __init__(self, frame_idx: int, eye: list[float] = None):
+    def __init__(self, frame_idx: int, blink: dict = None, mouth: dict = None):
         self.frame = frame_idx
-        self.eyes = eye if eye is not None else [0.4, 0.4]
+        self.exp   = [0.0] * _EXP_DIM
+        if blink:
+            for eye_idx, value in blink.items():
+                self.exp[eye_idx * 3 + 1] = value
+        if mouth:
+            for kp_idx, (dx, dy, dz) in mouth.items():
+                b = kp_idx * 3
+                self.exp[b], self.exp[b + 1], self.exp[b + 2] = dx, dy, dz
 
     def to_dict(self) -> dict:
         return {
             "frame": self.frame,
             "pitch": 0.0, "yaw": 0.0, "roll": 0.0,
             "tx": 0.0, "ty": 0.0, "scale": 1.0,
-            "exp": [0.0] * _EXP_DIM,
-            "eyes": self.eyes,
+            "exp": self.exp,
+            "eyes": [],
             "lip": 0.0,
         }
 
@@ -30,79 +37,91 @@ def add_blinks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
     from api.templates.blinks import blink  # local import — blinks.py imports Keyframe from here
 
     total_frames = len(keyframes)
-    cursor = 0
-    first = True
+    start_frame  = int(0.5 * fps)
 
     while True:
-        start = cursor + (int(0.5 * fps) if first else random.randint(4 * fps, 6 * fps))
-        first = False
-        blink_kfs, end_frame = blink(start_frame=start, type="neutral")
-
+        blink_kfs, end_frame = blink(start_frame)
         if end_frame >= total_frames:
             break
 
         kf_frames = np.array([kf.frame for kf in blink_kfs], dtype=float)
-        kf_eyes   = np.array([kf.eyes  for kf in blink_kfs], dtype=float)
-        for i in range(blink_kfs[0].frame, end_frame + 1):
-            left  = float(np.interp(i, kf_frames, kf_eyes[:, 0]))
-            right = float(np.interp(i, kf_frames, kf_eyes[:, 1]))
-            keyframes[i].eyes = [left, right]
+        for eye_idx in [11, 15]:
+            exp_col = eye_idx * 3 + 1
+            kf_vals = np.array([kf.exp[exp_col] for kf in blink_kfs], dtype=float)
+            for i in range(start_frame, end_frame + 1):
+                keyframes[i].exp[exp_col] = float(np.interp(i, kf_frames, kf_vals))
 
-        cursor = end_frame
+        start_frame += random.randint(4, 6) * fps
+
+    return keyframes
+
+
+def add_talks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
+    from api.templates.talk import mouth_shape  # local import — talk.py imports Keyframe from here
+
+    total_frames = len(keyframes)
+    mouth_kfs, end_frame = mouth_shape(start_frame=int(0.5 * fps))
+
+    if end_frame >= total_frames:
+        return keyframes
+
+    kf_frames = np.array([kf.frame for kf in mouth_kfs], dtype=float)
+    for exp_col in range(_EXP_DIM):
+        kf_vals = np.array([kf.exp[exp_col] for kf in mouth_kfs], dtype=float)
+        for i in range(mouth_kfs[0].frame, end_frame + 1):
+            keyframes[i].exp[exp_col] = float(np.interp(i, kf_frames, kf_vals))
 
     return keyframes
 
 
 def euler_to_R(pitch_deg: float, yaw_deg: float, roll_deg: float) -> np.ndarray:
     p, y, r = np.deg2rad(pitch_deg), np.deg2rad(yaw_deg), np.deg2rad(roll_deg)
-    Rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])
+    Rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p),  np.cos(p)]])
     Ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]])
     Rz = np.array([[np.cos(r), -np.sin(r), 0], [np.sin(r), np.cos(r), 0], [0, 0, 1]])
     return (Rz @ Ry @ Rx).T
 
 
-def build_template(keyframes: list, fps: int) -> dict:
+def build_template(keyframes: list[dict], fps: int) -> dict:
     keyframes = sorted(keyframes, key=lambda k: k["frame"])
-    kf_frames = np.array([k["frame"] for k in keyframes], dtype=float)
-    n_frames = int(keyframes[-1]["frame"]) + 1
-    all_frames = np.arange(n_frames, dtype=float)
+    src_t = np.array([k["frame"] for k in keyframes], dtype=float)
+    n     = int(src_t[-1]) + 1
+    dst_t = np.arange(n, dtype=float)
 
-    def interp(field, default):
-        vals = np.array([kf.get(field, default) for kf in keyframes], dtype=float)
-        return np.interp(all_frames, kf_frames, vals)
+    def dense(field, default):
+        vals = np.array([k.get(field, default) for k in keyframes], dtype=float)
+        return np.interp(dst_t, src_t, vals)
 
-    pitch = interp("pitch", 0.0)
-    yaw   = interp("yaw",   0.0)
-    roll  = interp("roll",  0.0)
-    tx    = interp("tx",    0.0)
-    ty    = interp("ty",    0.0)
-    scale = interp("scale", 1.0)
-    lip   = interp("lip",   0.0)
+    pitch = dense("pitch", 0.0)
+    yaw   = dense("yaw",   0.0)
+    roll  = dense("roll",  0.0)
+    t_x   = dense("tx",    0.0)
+    t_y   = dense("ty",    0.0)
+    scale = dense("scale", 1.0)
+    lip   = dense("lip",   0.0)
 
-    exp_kf = np.array([kf.get("exp", [0.0] * _EXP_DIM) for kf in keyframes], dtype=float)
-    exp = np.stack([np.interp(all_frames, kf_frames, exp_kf[:, i]) for i in range(_EXP_DIM)], axis=1)
+    exp = np.array([k.get("exp", [0.0] * _EXP_DIM) for k in keyframes], dtype=np.float32)
 
-    eyes_kf = np.array([kf.get("eyes", [0.4, 0.4]) for kf in keyframes], dtype=float)
-    eyes = np.stack([np.interp(all_frames, kf_frames, eyes_kf[:, i]) for i in range(2)], axis=1)
+    eyes = np.full((n, 2), 0.4, dtype=float)
 
-    motion = []
-    for i in range(n_frames):
-        R = euler_to_R(pitch[i], yaw[i], roll[i])
-        motion.append({
+    motion = [
+        {
             "scale": np.array([[scale[i]]], dtype=np.float32),
-            "R":     R[np.newaxis].astype(np.float32),
+            "R":     euler_to_R(pitch[i], yaw[i], roll[i])[np.newaxis].astype(np.float32),
             "exp":   exp[i].reshape(1, 21, 3).astype(np.float32),
-            "t":     np.array([[tx[i], ty[i], 0.0]], dtype=np.float32),
+            "t":     np.array([[t_x[i], t_y[i], 0.0]], dtype=np.float32),
             "kp":    np.zeros((1, 21, 3), dtype=np.float32),
-            "x_s":  np.zeros((1, 21, 3), dtype=np.float32),
-        })
+            "x_s":   np.zeros((1, 21, 3), dtype=np.float32),
+        }
+        for i in range(n)
+    ]
 
     return {
-        "n_frames":    n_frames,
-        "output_fps":  fps,
-        "motion":      motion,
-        "c_eyes_lst":  [eyes[i:i + 1].astype(np.float32) for i in range(n_frames)],
-        "c_lip_lst":   [np.array([[lip[i]]], dtype=np.float32) for i in range(n_frames)],
+        "n_frames":   n,
+        "output_fps": fps,
+        "motion":     motion,
+        "c_eyes_lst": [eyes[i : i + 1].astype(np.float32) for i in range(n)],
+        "c_lip_lst":  [np.array([[lip[i]]], dtype=np.float32) for i in range(n)],
     }
 
 
