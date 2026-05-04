@@ -1,5 +1,7 @@
 import os.path as osp
-from flask import Blueprint, jsonify, send_file
+import shutil
+import tempfile
+from flask import Blueprint, Response, jsonify
 from src.config.argument_config import ArgumentConfig
 from api.pipeline import get_pipeline
 
@@ -8,7 +10,6 @@ animate_bp = Blueprint("animate", __name__)
 _UPLOADS = osp.abspath(osp.join(osp.dirname(__file__), "..", "uploads"))
 _SOURCE = osp.join(_UPLOADS, "my_photo.png")
 _DRIVING = osp.join(_UPLOADS, "female.pkl")
-_OUTPUT_DIR = osp.join(_UPLOADS, "outputs")
 
 
 @animate_bp.post("/animate")
@@ -18,13 +19,23 @@ def animate():
     if not osp.exists(_DRIVING):
         return jsonify({"error": f"driving template not found: {_DRIVING}"}), 400
 
-    args = ArgumentConfig(
-        source=_SOURCE,
-        driving=_DRIVING,
-        output_dir=_OUTPUT_DIR,
-    )
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        args = ArgumentConfig(
+            source=_SOURCE,
+            driving=_DRIVING,
+            output_dir=tmp_dir,
+        )
 
-    pipeline = get_pipeline()
-    wfp, _ = pipeline.execute(args)
+        pipeline = get_pipeline()
+        wfp, _ = pipeline.execute(args)
 
-    return send_file(wfp, mimetype="video/mp4", as_attachment=False)
+        with open(wfp, "rb") as f:
+            video_bytes = f.read()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return Response(video_bytes, mimetype="video/mp4", headers={
+        "Content-Disposition": "inline; filename=animation.mp4",
+        "Content-Length": str(len(video_bytes)),
+    })

@@ -2,6 +2,8 @@ import json
 import os
 import os.path as osp
 import pickle
+import shutil
+import tempfile
 import threading
 from flask import Blueprint, Response
 from api.pipeline import get_pipeline
@@ -12,7 +14,6 @@ keyframes_bp = Blueprint("keyframes", __name__)
 
 _UPLOADS = osp.abspath(osp.join(osp.dirname(__file__), "..", "uploads"))
 _SOURCE = osp.join(_UPLOADS, "my_photo.png")
-_OUTPUT_DIR = osp.join(_UPLOADS, "outputs")
 
 _FPS = 25
 _PIPELINE_LOCK = threading.Lock()
@@ -24,22 +25,23 @@ def animate_keyframes():
     keyframes = add_blinks(keyframes, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)
 
-    # ── write template JSON to file ──────────────────────────────────────────
     json_path = osp.join(_UPLOADS, "blink_only_motion.json")
     with open(json_path, "w") as f:
         json.dump([kf.to_dict() for kf in keyframes], f, indent=2)
 
-    # ── save template to a temp pkl so the pipeline can load it ──────────────
-    tmp_pkl = osp.join(_UPLOADS, "_keyframe_blink_only_motion.pkl")
-    with open(tmp_pkl, "wb") as f:
-        pickle.dump(template, f)
-
+    tmp_dir = tempfile.mkdtemp()
     try:
-        os.makedirs(_OUTPUT_DIR, exist_ok=True)
+        tmp_pkl = osp.join(tmp_dir, "blink_only_motion.pkl")
+        output_dir = osp.join(tmp_dir, "outputs")
+        os.makedirs(output_dir)
+
+        with open(tmp_pkl, "wb") as f:
+            pickle.dump(template, f)
+
         args = ArgumentConfig(
             source=_SOURCE,
             driving=tmp_pkl,
-            output_dir=_OUTPUT_DIR,
+            output_dir=output_dir,
         )
 
         pipeline = get_pipeline()
@@ -58,8 +60,7 @@ def animate_keyframes():
         with open(wfp, "rb") as f:
             video_bytes = f.read()
     finally:
-        if osp.exists(tmp_pkl):
-            os.remove(tmp_pkl)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return Response(video_bytes, mimetype="video/mp4", headers={
         "Content-Disposition": "inline; filename=blink_only_motion.mp4",
