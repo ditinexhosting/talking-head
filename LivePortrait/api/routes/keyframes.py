@@ -48,7 +48,7 @@ _VISEME_SEQUENCE = [
 
 @keyframes_bp.post("/animate/keyframes")
 def animate_keyframes():
-    keyframes = neutral_keyframes(seconds=2, fps=_FPS)
+    keyframes = neutral_keyframes(seconds=1, fps=_FPS)
     keyframes = add_blinks(keyframes, fps=_FPS)
     keyframes = add_talks(keyframes, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)

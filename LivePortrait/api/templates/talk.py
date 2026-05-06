@@ -24,44 +24,71 @@ def _make_exp(kp_deltas: dict) -> list[float]:
 # ---------------------------------------------------------------------------
 # Per-viseme exp arrays
 # ---------------------------------------------------------------------------
+# Rhubarb Lip Sync mouth-shape reference:
+#   A — Closed mouth for “P”, “B”, and “M” sounds. Almost identical to X,
+#       but with ever-so-slight pressure between the lips.
+#   B — Slightly open mouth with clenched teeth. Used for most consonants
+#       (“K”, “S”, “T”, etc.) and some vowels such as “EE” in “bee”.
+#   C — Open mouth. Used for vowels like “EH” in “men” and “AE” in “bat”,
+#       and some consonants depending on context. Also an in-between from
+#       A/B to D, so A-C-D and B-C-D should animate smoothly.
+#   D — Wide open mouth. Used for vowels like “AA” in “father”.
+#   E — Slightly rounded mouth. Used for vowels like “AO” in “off” and
+#       “ER” in “bird”. Also an in-between from C/D to F; it should not be
+#       wider open than C, and C-E-F / D-E-F should animate smoothly.
+#   F — Puckered lips. Used for “UW” in “you”, “OW” in “show”, and “W” in
+#       “way”.
+#   G — Upper teeth touching the lower lip for “F” in “for” and “V” in
+#       “very”. Optional extended shape.
+#   H — Long “L” sounds, with the tongue raised behind the upper teeth.
+#       The mouth should be at least as open as C, but not quite as open as D.
+#       Optional extended shape.
+#   X — Idle/rest position for pauses in speech. Almost identical to A, but
+#       with closed, relaxed lips and slightly less pressure. Optional extended
+#       shape.
 
 # X — Silence / rest
 _EXP_X = [0.0] * _EXP_DIM
 
-# A — Closed lips  (m, b, p): slight lip press, near-neutral
-_EXP_A = _make_exp({
-    12: ( 0.00,  0.01,  0.00),
-    14: ( 0.00, -0.01,  0.00),
-    17: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.01,  0.00),
-})
+# A — Closed mouth (m, b, p): slight lip press, near-neutral
+_EXP_A = {
+    6:  (0.00,  -0.00, 0.00),
+    12: (0.00,  -0.00, 0.00),
+    14: (0.00,  0.003, 0.00), # Left smile
+    17: (0.00,  -0.003, 0.00), # Right smile
+    19: (0.00, -0.003, 0.00), # Bottom lip
+    20: (0.00, 0.003, 0.00), # Top lip
+}
 
-# B — Upper teeth on lower lip  (f, v): lower lip curls up under upper teeth
-_EXP_B = _make_exp({
-     6: ( 0.00,  0.01,  0.00),
-    12: ( 0.00,  0.04,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    19: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
+# B — Slightly open mouth with clenched teeth.
+_EXP_B = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00, 0.01, 0.00), # Bottom lip
+    20: (0.00, -0.006, 0.00), # Top lip
+}
 
-# C — Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)
-_EXP_C = _make_exp({
-    12: ( 0.00,  0.04,  0.00),
-    14: ( 0.00, -0.02,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
+# C — Open mouth
+_EXP_C = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00, 0.02, 0.00), # Bottom lip
+    20: (0.00, -0.008, 0.00), # Top lip
+}
 
-# D — Tongue behind upper teeth  (th): slightly open, upper lip raised
-_EXP_D = _make_exp({
-     6: ( 0.00,  0.01,  0.00),
-    12: ( 0.00,  0.04,  0.00),
-    14: ( 0.00, -0.03,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    19: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
+# D — Wide open mouth
+_EXP_D = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.003, 0.00),
+    17: (0.00,  0.003, 0.00),
+    19: (0.00, 0.04, 0.00), # Bottom lip
+    20: (0.00, -0.015, 0.00), # Top lip
+}
 
 # E — Tongue up  (l): slight open, similar to C
 _EXP_E = _make_exp({

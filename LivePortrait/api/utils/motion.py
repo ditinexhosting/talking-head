@@ -56,21 +56,27 @@ def add_blinks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
     return keyframes
 
 
+# All jaw-area points drop together (positive y = down) to open the mouth.
+# kp 19 and 20 go negative (up) — they pull back as the jaw drops.
+# Weights derived from friend's build_motion_template: [0.5, 1.0, 0.7, 0.4, -0.6, -0.6]
+# scaled by 0.05 for a clearly visible open position.
+_MOUTH_OPEN = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.003, 0.00),
+    17: (0.00,  0.003, 0.00),
+    19: (0.00, 0.04, 0.00), # Bottom lip
+    20: (0.00, -0.015, 0.00), # Top lip
+}
+
+
 def add_talks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
-    from api.templates.talk import mouth_shape  # local import — talk.py imports Keyframe from here
-
-    total_frames = len(keyframes)
-    mouth_kfs, end_frame = mouth_shape(start_frame=int(0.5 * fps))
-
-    if end_frame >= total_frames:
-        return keyframes
-
-    kf_frames = np.array([kf.frame for kf in mouth_kfs], dtype=float)
-    for exp_col in range(_EXP_DIM):
-        kf_vals = np.array([kf.exp[exp_col] for kf in mouth_kfs], dtype=float)
-        for i in range(mouth_kfs[0].frame, end_frame + 1):
-            keyframes[i].exp[exp_col] = float(np.interp(i, kf_frames, kf_vals))
-
+    for kf in keyframes[10:]:
+        for kp_idx, (dx, dy, dz) in _MOUTH_OPEN.items():
+            b = kp_idx * 3
+            kf.exp[b]     += dx
+            kf.exp[b + 1] += dy
+            kf.exp[b + 2] += dz
     return keyframes
 
 
