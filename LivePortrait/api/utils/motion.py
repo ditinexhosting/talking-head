@@ -64,7 +64,6 @@ def add_talks(keyframes: list["Keyframe"], viseme, fps: int = 25) -> list["Keyfr
     from api.templates.mouth import mouth_shape
 
     formatted_viseme = visemes_to_frames(viseme)
-    print(formatted_viseme)
     mouth_kfs, _end = mouth_shape(formatted_viseme)
     # print("_end:", _end)
     # for kf in mouth_kfs:

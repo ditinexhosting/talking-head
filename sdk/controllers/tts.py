@@ -98,7 +98,7 @@ async def _run_rhubarb(wav_path: str, transcript: str) -> list[dict]:
 async def text_to_speech_kokoro(
     conn: WebSocketConnection,
     text: str,
-    voice: str = "af_heart",
+    voice: str = "am_adam",
     speed: float = 1.0,
     lang: str = "en-us",
 ):

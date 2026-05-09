@@ -5,7 +5,7 @@ import pickle
 import shutil
 import tempfile
 import threading
-from flask import Blueprint, Response
+from flask import Blueprint, Response, request, jsonify
 from api.pipeline import get_pipeline
 from api.utils.motion import add_blinks, add_talks, build_template, neutral_keyframes
 from src.config.argument_config import ArgumentConfig
@@ -192,21 +192,27 @@ _VISEME_SEQUENCE = [
 
 @keyframes_bp.post("/animate/keyframes")
 def animate_keyframes():
+    body = request.get_json(silent=True) or {}
+    viseme_sequence = body.get("visemes") or _VISEME_SEQUENCE
+
+    if not isinstance(viseme_sequence, list) or len(viseme_sequence) == 0:
+        return jsonify({"error": "visemes must be a non-empty array"}), 400
+
     # 1 frame lead-in + 3 frames tail + 3 frames pause buffer = 7 extra; round() on sequence end
-    _TOTAL_FRAMES = round(_VISEME_SEQUENCE[-1]["end"] * _FPS) + 7
+    _TOTAL_FRAMES = round(viseme_sequence[-1]["end"] * _FPS) + 7
     _TOTAL_SECONDS = _TOTAL_FRAMES / _FPS
     # Generate blank keyframe sequence
     keyframes = neutral_keyframes(seconds=_TOTAL_SECONDS, fps=_FPS)
     # Add blink animation
     keyframes = add_blinks(keyframes, fps=_FPS)
     # Add lips animation
-    keyframes = add_talks(keyframes, _VISEME_SEQUENCE, fps=_FPS)
+    keyframes = add_talks(keyframes, viseme_sequence, fps=_FPS)
     # Build the template
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)
 
-    json_path = osp.join(_UPLOADS, "blink_only_motion.json")
-    with open(json_path, "w") as f:
-        json.dump([kf.to_dict() for kf in keyframes], f, indent=2)
+    # json_path = osp.join(_UPLOADS, "blink_only_motion.json")
+    # with open(json_path, "w") as f:
+    #     json.dump([kf.to_dict() for kf in keyframes], f, indent=2)
 
     tmp_dir = tempfile.mkdtemp()
     try:
