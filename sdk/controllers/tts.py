@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from controllers.speech2video import speech_to_video
+
 if TYPE_CHECKING:
     from controllers.ws import WebSocketConnection
 
@@ -116,11 +118,18 @@ async def text_to_speech_kokoro(
             os.unlink(tmp_path)
 
         pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
+        video_bytes = await speech_to_video(visemes) if visemes else None
+
         await conn.send_json({
             "session_id": conn.session_id,
-            "event": "audio",
-            "sample_rate": sample_rate,
-            "encoding": "pcm_s16le",
-            "data": base64.b64encode(pcm.tobytes()).decode(),
-            "visemes": visemes,
+            "event": "buffer",
+            "audio": {
+                "sample_rate": sample_rate,
+                "encoding": "pcm_s16le",
+                "data": base64.b64encode(pcm.tobytes()).decode(),
+            },
+            "video": {
+                "encoding": "mp4",
+                "data": base64.b64encode(video_bytes).decode(),
+            } if video_bytes else None,
         })
