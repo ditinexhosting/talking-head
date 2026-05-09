@@ -139,6 +139,15 @@ def mouth_shape(viseme_sequence: list[dict]) -> tuple[list[Keyframe], int]:
     for item in viseme_sequence:
         exp = _VISEME_MAP.get(item['viseme'], _EXP_X)
         keyframes.append(Keyframe(frame_idx=frame_idx, mouth=exp))
+        if item['viseme'] == 'X' and frame_idx + item['frames'] - 2 > frame_idx:
+            rest_end_frame = frame_idx + item['frames'] - 2
+            keyframes.append(Keyframe(frame_idx=rest_end_frame, mouth=_EXP_X))
+
         frame_idx += item['frames']
-    end_frame = frame_idx - 1
+
+    keyframes.append(Keyframe(frame_idx=frame_idx, mouth=_EXP_X))
+    frame_idx += 2
+    keyframes.append(Keyframe(frame_idx=frame_idx, mouth=_EXP_X))
+
+    end_frame = frame_idx
     return keyframes, end_frame

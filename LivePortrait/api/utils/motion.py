@@ -56,31 +56,29 @@ def add_blinks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
     return keyframes
 
 
-# All jaw-area points drop together (positive y = down) to open the mouth.
-# kp 19 and 20 go negative (up) — they pull back as the jaw drops.
-# Weights derived from friend's build_motion_template: [0.5, 1.0, 0.7, 0.4, -0.6, -0.6]
-# scaled by 0.05 for a clearly visible open position.
-_MOUTH_OPEN = {
-    6:  (0.00,  0.02, 0.00),
-    12: (0.00,  0.02, 0.00),
-    14: (0.00,  -0.00, 0.00),
-    17: (0.00,  0.00, 0.00),
-    19: (0.00, 0.02, -0.010), # Bottom lip
-    20: (0.00, -0.008, 0.0), # Top lip
-}
+
+_MOUTH_KP_INDICES = [6, 12, 14, 17, 19, 20]
 
 
 def add_talks(keyframes: list["Keyframe"], viseme, fps: int = 25) -> list["Keyframe"]:
+    from api.templates.mouth import mouth_shape
 
     formatted_viseme = visemes_to_frames(viseme)
     print(formatted_viseme)
+    mouth_kfs, _end = mouth_shape(formatted_viseme)
+    # print("_end:", _end)
+    # for kf in mouth_kfs:
+    #     print(f"  frame={kf.frame}  exp={kf.exp}")
 
-    for kf in keyframes[10:]:
-        for kp_idx, (dx, dy, dz) in _MOUTH_OPEN.items():
-            b = kp_idx * 3
-            kf.exp[b]     += dx
-            kf.exp[b + 1] += dy
-            kf.exp[b + 2] += dz
+    kf_frames = np.array([kf.frame for kf in mouth_kfs], dtype=float)
+
+    for kp_idx in _MOUTH_KP_INDICES:
+        for coord in range(3):
+            exp_col = kp_idx * 3 + coord
+            kf_vals = np.array([kf.exp[exp_col] for kf in mouth_kfs], dtype=float)
+            for kf in keyframes:
+                kf.exp[exp_col] = float(np.interp(kf.frame, kf_frames, kf_vals))
+
     return keyframes
 
 

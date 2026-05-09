@@ -192,9 +192,16 @@ _VISEME_SEQUENCE = [
 
 @keyframes_bp.post("/animate/keyframes")
 def animate_keyframes():
-    keyframes = neutral_keyframes(seconds=1, fps=_FPS)
+    # 1 frame lead-in + 3 frames tail + 3 frames pause buffer = 7 extra; round() on sequence end
+    _TOTAL_FRAMES = round(_VISEME_SEQUENCE[-1]["end"] * _FPS) + 7
+    _TOTAL_SECONDS = _TOTAL_FRAMES / _FPS
+    # Generate blank keyframe sequence
+    keyframes = neutral_keyframes(seconds=_TOTAL_SECONDS, fps=_FPS)
+    # Add blink animation
     keyframes = add_blinks(keyframes, fps=_FPS)
+    # Add lips animation
     keyframes = add_talks(keyframes, _VISEME_SEQUENCE, fps=_FPS)
+    # Build the template
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)
 
     json_path = osp.join(_UPLOADS, "blink_only_motion.json")

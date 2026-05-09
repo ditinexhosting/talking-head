@@ -21,17 +21,6 @@ _MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
 _VOICES_PATH = str(_ASSETS / "voices-v1.0.bin")
 _RHUBARB = str(_ASSETS / "rhubarb-1.14.0" / "rhubarb")
 
-_VISEME_DESCRIPTIONS = {
-    "A": "Closed lips  (m, b, p)",
-    "B": "Upper teeth on lower lip  (f, v)",
-    "C": "Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)",
-    "D": "Tongue behind upper teeth  (th)",
-    "E": "Tongue up  (l)",
-    "F": "Rounded / puckered lips  (w, q)",
-    "G": "Relaxed open mouth  (a, i)",
-    "H": "Wide open mouth  (short a, e)",
-    "X": "Silence / rest",
-}
 
 _kokoro = None
 
@@ -80,8 +69,7 @@ def _enrich_visemes(mouth_cues: list[dict]) -> list[dict]:
             "start":       start,
             "end":         end,
             "duration":    round(end - start, 3),
-            "viseme":      viseme,
-            "description": _VISEME_DESCRIPTIONS.get(viseme, "unknown"),
+            "viseme":      viseme
         })
     return result
 
