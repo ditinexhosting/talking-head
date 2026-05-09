@@ -22,6 +22,8 @@ _ASSETS = Path(__file__).parent.parent / "assets"
 _MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
 _VOICES_PATH = str(_ASSETS / "voices-v1.0.bin")
 _RHUBARB = str(_ASSETS / "rhubarb-1.14.0" / "rhubarb")
+_SAMPLE_DIR = _ASSETS / "sample"
+_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 _kokoro = None
@@ -97,6 +99,13 @@ async def _run_rhubarb(wav_path: str, transcript: str) -> list[dict]:
     return _enrich_visemes(mouth_cues)
 
 
+async def text_to_speech_kokoro_sample(conn: WebSocketConnection):
+    for name in ("000.json", "001.json"):
+        payload = json.loads((_SAMPLE_DIR / name).read_text())
+        await conn.send_json(payload)
+        await asyncio.sleep(1)
+
+
 async def text_to_speech_kokoro(
     conn: WebSocketConnection,
     text: str,
@@ -106,7 +115,7 @@ async def text_to_speech_kokoro(
 ):
     kokoro = _get_kokoro()
 
-    for sentence in _split_into_sentences(text):
+    for idx, sentence in enumerate(_split_into_sentences(text)):
         samples, sample_rate = kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
@@ -120,7 +129,7 @@ async def text_to_speech_kokoro(
         pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
         video_bytes = await speech_to_video(visemes) if visemes else None
 
-        await conn.send_json({
+        payload = {
             "session_id": conn.session_id,
             "event": "buffer",
             "audio": {
@@ -132,4 +141,9 @@ async def text_to_speech_kokoro(
                 "encoding": "mp4",
                 "data": base64.b64encode(video_bytes).decode(),
             } if video_bytes else None,
-        })
+        }
+
+        # sample_path = _SAMPLE_DIR / f"{conn.session_id}_{idx:03d}.json"
+        # sample_path.write_text(json.dumps(payload, indent=2))
+
+        await conn.send_json(payload)

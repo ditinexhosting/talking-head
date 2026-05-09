@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from controllers.tts import text_to_speech_kokoro
+from controllers.tts import text_to_speech_kokoro, text_to_speech_kokoro_sample
 
 
 class ConnectionManager:
@@ -62,7 +62,8 @@ class WebSocketConnection:
                     await self.send_json({"session_id": self.session_id, "error": "missing 'text' field"})
                     continue
 
-                await text_to_speech_kokoro(self, text)
+                # await text_to_speech_kokoro(self, text)
+                await text_to_speech_kokoro_sample(self)
                 await self.send_json({"session_id": self.session_id, "event": "done"})
         except WebSocketDisconnect:
             await self.close()
