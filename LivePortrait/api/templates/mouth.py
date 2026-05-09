@@ -24,149 +24,129 @@ def _make_exp(kp_deltas: dict) -> list[float]:
 # ---------------------------------------------------------------------------
 # Per-viseme exp arrays
 # ---------------------------------------------------------------------------
+# Rhubarb Lip Sync mouth-shape reference:
+#   A — Closed mouth for “P”, “B”, and “M” sounds. Almost identical to X,
+#       but with ever-so-slight pressure between the lips.
+#   B — Slightly open mouth with clenched teeth. Used for most consonants
+#       (“K”, “S”, “T”, etc.) and some vowels such as “EE” in “bee”.
+#   C — Open mouth. Used for vowels like “EH” in “men” and “AE” in “bat”,
+#       and some consonants depending on context. Also an in-between from
+#       A/B to D, so A-C-D and B-C-D should animate smoothly.
+#   D — Wide open mouth. Used for vowels like “AA” in “father”.
+#   E — Slightly rounded mouth. Used for vowels like “AO” in “off” and
+#       “ER” in “bird”. Also an in-between from C/D to F; it should not be
+#       wider open than C, and C-E-F / D-E-F should animate smoothly.
+#   F — Puckered lips. Used for “UW” in “you”, “OW” in “show”, and “W” in
+#       “way”.
+#   G — Upper teeth touching the lower lip for “F” in “for” and “V” in
+#       “very”. Optional extended shape.
+#   H — Long “L” sounds, with the tongue raised behind the upper teeth.
+#       The mouth should be at least as open as C, but not quite as open as D.
+#       Optional extended shape.
+#   X — Idle/rest position for pauses in speech. Almost identical to A, but
+#       with closed, relaxed lips and slightly less pressure. Optional extended
+#       shape.
+
+
+# A — Closed mouth (m, b, p): slight lip press, near-neutral
+_EXP_A = {
+    6:  (0.00,  -0.00, 0.00),
+    12: (0.00,  -0.00, 0.00),
+    14: (0.00,  0.003, 0.00), # Left smile
+    17: (0.00,  -0.003, 0.00), # Right smile
+    19: (0.00, -0.003, 0.00), # Bottom lip
+    20: (0.00, 0.003, 0.00), # Top lip
+}
+
+# B — Slightly open mouth with clenched teeth.
+_EXP_B = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00, 0.01, 0.00), # Bottom lip
+    20: (0.00, -0.006, 0.00), # Top lip
+}
+
+# C — Open mouth
+_EXP_C = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00, 0.02, 0.00), # Bottom lip
+    20: (0.00, -0.008, 0.00), # Top lip
+}
+
+# D — Wide open mouth
+_EXP_D = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.003, 0.00),
+    17: (0.00,  0.003, 0.00),
+    19: (0.00, 0.04, 0.00), # Bottom lip
+    20: (0.00, -0.015, 0.00), # Top lip
+}
+
+# E — Slightly rounded mouth
+_EXP_E = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  0.008, 0.00),
+    17: (0.00,  -0.008, 0.00),
+    19: (0.00, 0.025, 0.008), # Bottom lip
+    20: (0.00, -0.008, 0.008), # Top lip
+}
+
+# F — Puckered lips
+_EXP_F = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  0.01, 0.00),
+    17: (0.00,  -0.01, 0.00),
+    19: (0.00, 0.025, 0.02), # Bottom lip
+    20: (0.00, -0.008, 0.02), # Top lip
+}
+
+
+# G — Upper teeth touching the lower lip
+_EXP_G = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  0.007, 0.00),
+    17: (0.00,  -0.007, 0.00),
+    19: (0.00, -0.012, -0.008), # Bottom lip
+    20: (0.00, -0.01, 0.00), # Top lip
+}
+
+# H — This shape is used for long “L” sounds, with the tongue raised behind the upper teeth.
+_EXP_H = {
+    6:  (0.00,  0.02, 0.00),
+    12: (0.00,  0.02, 0.00),
+    14: (0.00,  -0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00, 0.02, -0.010), # Bottom lip
+    20: (0.00, -0.008, 0.00), # Top lip
+}
 
 # X — Silence / rest
-_EXP_X = [0.0] * _EXP_DIM
-
-# A — Closed lips  (m, b, p): slight lip press, near-neutral
-_EXP_A = _make_exp({
-    12: ( 0.00,  0.01,  0.00),
-    14: ( 0.00, -0.01,  0.00),
-    17: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.01,  0.00),
-})
-
-# B — Upper teeth on lower lip  (f, v): lower lip curls up under upper teeth
-_EXP_B = _make_exp({
-     6: ( 0.00,  0.01,  0.00),
-    12: ( 0.00,  0.04,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    19: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
-
-# C — Slightly open, no teeth  (d, g, k, n, r, s, t, y, z)
-_EXP_C = _make_exp({
-    12: ( 0.00,  0.04,  0.00),
-    14: ( 0.00, -0.02,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
-
-# D — Tongue behind upper teeth  (th): slightly open, upper lip raised
-_EXP_D = _make_exp({
-     6: ( 0.00,  0.01,  0.00),
-    12: ( 0.00,  0.04,  0.00),
-    14: ( 0.00, -0.03,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    19: ( 0.00,  0.01,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
-
-# E — Tongue up  (l): slight open, similar to C
-_EXP_E = _make_exp({
-    12: ( 0.00,  0.04,  0.00),
-    14: ( 0.00, -0.02,  0.00),
-    17: ( 0.00,  0.04,  0.00),
-    20: ( 0.00,  0.03,  0.00),
-})
-
-# F — Rounded / puckered lips  (w, q): corners pull inward, lips protrude
-_EXP_F = _make_exp({
-     6: ( 0.02,  0.00,  0.02),
-    12: ( 0.00,  0.01,  0.04),
-    14: ( 0.00, -0.01,  0.04),
-    17: ( 0.00,  0.01,  0.03),
-    19: (-0.02,  0.00,  0.02),
-    20: ( 0.00,  0.01,  0.03),
-})
-
-# G — Relaxed open mouth  (a, i): medium jaw drop
-_EXP_G = _make_exp({
-     6: ( 0.00,  0.02,  0.00),
-    12: ( 0.00,  0.07,  0.00),
-    14: ( 0.00, -0.03,  0.00),
-    17: ( 0.00,  0.07,  0.00),
-    19: ( 0.00,  0.02,  0.00),
-    20: ( 0.00,  0.05,  0.00),
-})
-
-# H — Wide open mouth  (short a, e): maximum jaw drop
-_EXP_H = _make_exp({
-     6: ( 0.00,  0.03,  0.00),
-    12: ( 0.00,  0.11,  0.00),
-    14: ( 0.00, -0.05,  0.00),
-    17: ( 0.00,  0.11,  0.00),
-    19: ( 0.00,  0.03,  0.00),
-    20: ( 0.00,  0.08,  0.00),
-})
-
-
-# ---------------------------------------------------------------------------
-# Public lookup
-# ---------------------------------------------------------------------------
-
-# Lip-open ratio per viseme (0.0 = closed, ~0.8 = wide open).
-# Passed to the lip-retargeting network (R_lip) as c_lip_lst.
-VISEME_LIP: dict[str, float] = {
-    "X": 0.00,  # silence / rest
-    "A": 0.00,  # closed lips (m, b, p)
-    "B": 0.20,  # upper teeth on lower lip (f, v)
-    "C": 0.30,  # slightly open (d, g, k, n, r, s, t, y, z)
-    "D": 0.30,  # tongue behind upper teeth (th)
-    "E": 0.30,  # tongue up (l)
-    "F": 0.25,  # rounded / puckered (w, q)
-    "G": 0.60,  # relaxed open (a, i)
-    "H": 0.80,  # wide open (short a, e)
-}
-
-VISEME_EXP: dict[str, list[float]] = {
-    "X": _EXP_X,
-    "A": _EXP_A,
-    "B": _EXP_B,
-    "C": _EXP_C,
-    "D": _EXP_D,
-    "E": _EXP_E,
-    "F": _EXP_F,
-    "G": _EXP_G,
-    "H": _EXP_H,
+_EXP_X = {
+    6:  (0.00,  0.00, 0.00),
+    12: (0.00,  0.00, 0.00),
+    14: (0.00,  0.00, 0.00),
+    17: (0.00,  0.00, 0.00),
+    19: (0.00,  0.00, 0.00), # Bottom lip
+    20: (0.00,  0.00, 0.00), # Top lip
 }
 
 
-def viseme_exp(viseme: str) -> list[float]:
-    """Return the 63-d exp array for the given viseme label (falls back to X)."""
-    return VISEME_EXP.get(viseme, _EXP_X)
 
-
-def viseme_lip(viseme: str) -> float:
-    """Return the lip-open ratio for the given viseme label (falls back to 0.0)."""
-    return VISEME_LIP.get(viseme, 0.0)
-
-
-# =====================================
-# Mouth shape for speaking
-# =====================================
-
-def mouth(
-    viseme_sequence: list[dict],
-    fps: int = 25,
-) -> list[Keyframe]:
-    """
-    Convert a timed viseme sequence into a list of Keyframes ready for build_template().
-
-    Each entry in viseme_sequence must have "start" (seconds), "end" (seconds),
-    and "viseme" (one of X A B C D E F G H).
-    """
-    kf_map: dict[int, Keyframe] = {}
-
-    for seg in viseme_sequence:
-        start_frame = round(seg["start"] * fps)
-        end_frame   = round(seg["end"]   * fps)
-        exp         = viseme_exp(seg["viseme"])
-        lip         = viseme_lip(seg["viseme"])
-
-        for frame in (start_frame, end_frame):
-            if frame not in kf_map:
-                kf_map[frame] = Keyframe(frame_idx=frame, exp=exp, lip=lip)
-
-    return sorted(kf_map.values(), key=lambda k: k.frame)
+def mouth_shape(start_frame: int):
+    keyframes = [
+        Keyframe(frame_idx=start_frame),
+        Keyframe(frame_idx=start_frame + 2,  mouth=_EXP_H),
+        Keyframe(frame_idx=start_frame + 8,  mouth=_EXP_H),
+        Keyframe(frame_idx=start_frame + 10),
+    ]
+    end_frame = keyframes[-1].frame
+    return keyframes, end_frame
