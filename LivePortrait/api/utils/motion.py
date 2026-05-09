@@ -70,7 +70,11 @@ _MOUTH_OPEN = {
 }
 
 
-def add_talks(keyframes: list["Keyframe"], fps: int = 25) -> list["Keyframe"]:
+def add_talks(keyframes: list["Keyframe"], viseme, fps: int = 25) -> list["Keyframe"]:
+
+    formatted_viseme = visemes_to_frames(viseme)
+    print(formatted_viseme)
+
     for kf in keyframes[10:]:
         for kp_idx, (dx, dy, dz) in _MOUTH_OPEN.items():
             b = kp_idx * 3
@@ -129,6 +133,14 @@ def build_template(keyframes: list[dict], fps: int) -> dict:
         "c_eyes_lst": [eyes[i : i + 1].astype(np.float32) for i in range(n)],
         "c_lip_lst":  [np.array([[lip[i]]], dtype=np.float32) for i in range(n)],
     }
+
+
+def visemes_to_frames(visemes: list[dict], fps: int = 25) -> list[dict]:
+    result = []
+    for v in visemes:
+        n_frames = max(1, round(v["duration"] * fps))
+        result.append({"viseme": v["viseme"], "frames": n_frames})
+    return result
 
 
 def template_to_json(template: dict) -> dict:
