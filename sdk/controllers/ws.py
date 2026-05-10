@@ -45,6 +45,9 @@ class WebSocketConnection:
     async def send_json(self, payload: dict):
         await self.ws.send_text(json.dumps(payload))
 
+    async def send_bytes(self, data: bytes):
+        await self.ws.send_bytes(data)
+
     async def run_tts(self):
         await self.accept()
         await self.send_json({"session_id": self.session_id, "event": "connected"})
@@ -62,7 +65,7 @@ class WebSocketConnection:
                     await self.send_json({"session_id": self.session_id, "error": "missing 'text' field"})
                     continue
 
-                # await text_to_speech_kokoro(self, text)
+                #await text_to_speech_kokoro(self, text)
                 await text_to_speech_kokoro_sample(self)
                 await self.send_json({"session_id": self.session_id, "event": "done"})
         except WebSocketDisconnect:

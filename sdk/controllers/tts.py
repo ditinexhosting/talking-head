@@ -99,10 +99,38 @@ async def _run_rhubarb(wav_path: str, transcript: str) -> list[dict]:
     return _enrich_visemes(mouth_cues)
 
 
+_TAG_AUDIO = b"\x01"
+_TAG_VIDEO = b"\x02"
+
+
+async def _send_interleaved(conn: WebSocketConnection, audio_bytes: bytes, video_bytes: bytes | None, chunk: int = 64 * 1024):
+    a_len = len(audio_bytes)
+    v_len = len(video_bytes) if video_bytes else 0
+    a_off = v_off = 0
+    while a_off < a_len or v_off < v_len:
+        if a_off < a_len:
+            await conn.send_bytes(_TAG_AUDIO + audio_bytes[a_off:a_off + chunk])
+            a_off += chunk
+        if v_off < v_len:
+            await conn.send_bytes(_TAG_VIDEO + video_bytes[v_off:v_off + chunk])
+            v_off += chunk
+
+
 async def text_to_speech_kokoro_sample(conn: WebSocketConnection):
-    for name in ("000.json", "001.json"):
+    for name in sorted(p.name for p in _SAMPLE_DIR.glob("[0-9][0-9][0-9].json")):
         payload = json.loads((_SAMPLE_DIR / name).read_text())
-        await conn.send_json(payload)
+        audio_bytes = base64.b64decode(payload["audio"]["data"])
+        video_bytes = base64.b64decode(payload["video"]["data"]) if payload.get("video") else None
+
+        await conn.send_json({
+            "session_id": conn.session_id,
+            "event": "buffer",
+            "audio": {"sample_rate": payload["audio"]["sample_rate"], "encoding": payload["audio"]["encoding"], "size": len(audio_bytes)},
+            "video": {"encoding": payload["video"]["encoding"], "size": len(video_bytes)} if video_bytes else None,
+        })
+
+        await _send_interleaved(conn, audio_bytes, video_bytes)
+
         await asyncio.sleep(1)
 
 
@@ -127,23 +155,28 @@ async def text_to_speech_kokoro(
             os.unlink(tmp_path)
 
         pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
+        audio_bytes = pcm.tobytes()
+        (_SAMPLE_DIR / "visemes_debug.json").write_text(json.dumps({"visemes": visemes}, indent=2))
         video_bytes = await speech_to_video(visemes) if visemes else None
 
-        payload = {
-            "session_id": conn.session_id,
-            "event": "buffer",
+        sample_payload = {
             "audio": {
                 "sample_rate": sample_rate,
                 "encoding": "pcm_s16le",
-                "data": base64.b64encode(pcm.tobytes()).decode(),
+                "data": base64.b64encode(audio_bytes).decode("ascii"),
             },
             "video": {
                 "encoding": "mp4",
-                "data": base64.b64encode(video_bytes).decode(),
+                "data": base64.b64encode(video_bytes).decode("ascii"),
             } if video_bytes else None,
         }
+        (_SAMPLE_DIR / f"{idx:03d}.json").write_text(json.dumps(sample_payload))
 
-        # sample_path = _SAMPLE_DIR / f"{conn.session_id}_{idx:03d}.json"
-        # sample_path.write_text(json.dumps(payload, indent=2))
+        await conn.send_json({
+            "session_id": conn.session_id,
+            "event": "chunk",
+            "audio": {"sample_rate": sample_rate, "encoding": "pcm_s16le", "size": len(audio_bytes)},
+            "video": {"encoding": "mp4", "size": len(video_bytes)} if video_bytes else None,
+        })
 
-        await conn.send_json(payload)
+        await _send_interleaved(conn, audio_bytes, video_bytes)

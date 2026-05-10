@@ -7,7 +7,7 @@ import tempfile
 import threading
 from flask import Blueprint, Response, request, jsonify
 from api.pipeline import get_pipeline
-from api.utils.motion import add_blinks, add_talks, build_template, neutral_keyframes
+from api.utils.motion import add_blinks, add_talks, build_template, neutral_keyframes, template_to_json
 from src.config.argument_config import ArgumentConfig
 
 keyframes_bp = Blueprint("keyframes", __name__)
@@ -199,7 +199,7 @@ def animate_keyframes():
         return jsonify({"error": "visemes must be a non-empty array"}), 400
 
     # 1 frame lead-in + 3 frames tail + 3 frames pause buffer = 7 extra; round() on sequence end
-    _TOTAL_FRAMES = round(viseme_sequence[-1]["end"] * _FPS) + 7
+    _TOTAL_FRAMES = round(viseme_sequence[-1]["end"] * _FPS) + 15
     _TOTAL_SECONDS = _TOTAL_FRAMES / _FPS
     # Generate blank keyframe sequence
     keyframes = neutral_keyframes(seconds=_TOTAL_SECONDS, fps=_FPS)
@@ -210,13 +210,17 @@ def animate_keyframes():
     # Build the template
     template = build_template([kf.to_dict() for kf in keyframes], _FPS)
 
-    # json_path = osp.join(_UPLOADS, "blink_only_motion.json")
+    # json_path = osp.join(_UPLOADS, "motion.json")
     # with open(json_path, "w") as f:
     #     json.dump([kf.to_dict() for kf in keyframes], f, indent=2)
 
+    # template_json_path = osp.join(_UPLOADS, "template.json")
+    # with open(template_json_path, "w") as f:
+    #     json.dump(template_to_json(template), f, indent=2)
+
     tmp_dir = tempfile.mkdtemp()
     try:
-        tmp_pkl = osp.join(tmp_dir, "blink_only_motion.pkl")
+        tmp_pkl = osp.join(tmp_dir, "motion.pkl")
         output_dir = osp.join(tmp_dir, "outputs")
         os.makedirs(output_dir)
 

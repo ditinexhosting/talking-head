@@ -65,18 +65,17 @@ def add_talks(keyframes: list["Keyframe"], viseme, fps: int = 25) -> list["Keyfr
 
     formatted_viseme = visemes_to_frames(viseme)
     mouth_kfs, _end = mouth_shape(formatted_viseme)
-    # print("_end:", _end)
-    # for kf in mouth_kfs:
-    #     print(f"  frame={kf.frame}  exp={kf.exp}")
 
-    kf_frames = np.array([kf.frame for kf in mouth_kfs], dtype=float)
+    kf_frames   = np.array([kf.frame for kf in mouth_kfs], dtype=float)
+    start_frame = int(kf_frames[0])
+    end_frame   = min(_end, len(keyframes) - 1)
 
     for kp_idx in _MOUTH_KP_INDICES:
         for coord in range(3):
             exp_col = kp_idx * 3 + coord
             kf_vals = np.array([kf.exp[exp_col] for kf in mouth_kfs], dtype=float)
-            for kf in keyframes:
-                kf.exp[exp_col] = float(np.interp(kf.frame, kf_frames, kf_vals))
+            for i in range(start_frame, end_frame + 1):
+                keyframes[i].exp[exp_col] = float(np.interp(i, kf_frames, kf_vals))
 
     return keyframes
 
