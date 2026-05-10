@@ -124,13 +124,17 @@ async def text_to_speech_kokoro_sample(conn: WebSocketConnection):
 
         await conn.send_json({
             "session_id": conn.session_id,
-            "event": "buffer",
+            "event": "chunk_start",
             "audio": {"sample_rate": payload["audio"]["sample_rate"], "encoding": payload["audio"]["encoding"], "size": len(audio_bytes)},
             "video": {"encoding": payload["video"]["encoding"], "size": len(video_bytes)} if video_bytes else None,
         })
 
         await _send_interleaved(conn, audio_bytes, video_bytes)
 
+        await conn.send_json({
+            "session_id": conn.session_id,
+            "event": "chunk_end"
+        })
         await asyncio.sleep(1)
 
 
@@ -174,9 +178,14 @@ async def text_to_speech_kokoro(
 
         await conn.send_json({
             "session_id": conn.session_id,
-            "event": "chunk",
+            "event": "chunk_start",
             "audio": {"sample_rate": sample_rate, "encoding": "pcm_s16le", "size": len(audio_bytes)},
             "video": {"encoding": "mp4", "size": len(video_bytes)} if video_bytes else None,
         })
 
         await _send_interleaved(conn, audio_bytes, video_bytes)
+
+        await conn.send_json({
+            "session_id": conn.session_id,
+            "event": "chunk_end"
+        })

@@ -134,10 +134,9 @@ _VISEME_MAP = {
 
 
 def mouth_shape(viseme_sequence: list[dict]) -> tuple[list[Keyframe], int]:
-    frame_idx = 2
+    frame_idx = 1
     keyframes = [
         Keyframe(frame_idx=0, mouth=_EXP_X),
-        Keyframe(frame_idx=1, mouth=_EXP_X),
     ]
     for item in viseme_sequence:
         exp = _VISEME_MAP.get(item['viseme'], _EXP_X)
