@@ -77,3 +77,9 @@ uvicorn main:app --reload --host 0.0.0.0 --port 2000
 | WebSocket | `/ws/audio`      | TTS with viseme data                     |
 
 Swagger UI is available at `http://localhost:2000/docs`.
+
+
+ref links :
+https://github.com/warmshao/FasterLivePortrait/tree/master -> FasterLivePortal
+
+https://github.com/GVCLab/PersonaLive --> Personal live stream
