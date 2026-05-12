@@ -10,7 +10,7 @@ def get_pipeline() -> LivePortraitPipeline:
     global _pipeline
     if _pipeline is None:
         _pipeline = LivePortraitPipeline(
-            inference_cfg=InferenceConfig(),
+            inference_cfg=InferenceConfig(flag_pasteback=True),
             crop_cfg=CropConfig(),
         )
     return _pipeline
