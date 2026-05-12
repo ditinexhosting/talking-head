@@ -11,6 +11,7 @@ import cv2; cv2.setNumThreads(0); cv2.ocl.setUseOpenCL(False)
 import numpy as np
 import os
 import os.path as osp
+import time
 from rich.progress import track
 
 from src.config.argument_config import ArgumentConfig
@@ -78,6 +79,8 @@ class LivePortraitPipeline(object):
         inf_cfg = self.live_portrait_wrapper.inference_cfg
         device = self.live_portrait_wrapper.device
         crop_cfg = self.cropper.crop_cfg
+        _t0 = time.time()
+        log(f'[TIMER] Pipeline start')
 
         ######## load source input ########
         flag_is_source_video = False
@@ -96,6 +99,7 @@ class LivePortraitPipeline(object):
             log(f"Load source video from {args.source}, FPS is {source_fps}")
         else:  # source input is an unknown format
             raise Exception(f"Unknown source format: {args.source}")
+        log(f'[TIMER] Source loaded in {time.time()-_t0:.3f}s'); _t1 = time.time()
 
         ######## process driving info ########
         flag_load_from_template = is_template(args.driving)
@@ -174,6 +178,7 @@ class LivePortraitPipeline(object):
         if not flag_is_driving_video:
             c_d_eyes_lst = c_d_eyes_lst*n_frames
             c_d_lip_lst = c_d_lip_lst*n_frames
+        log(f'[TIMER] Driving template ready in {time.time()-_t1:.3f}s'); _t2 = time.time()
 
         ######## prepare for pasteback ########
         I_p_pstbk_lst = None
@@ -263,6 +268,7 @@ class LivePortraitPipeline(object):
 
             if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
                 mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
+        log(f'[TIMER] Source processed (crop + features) in {time.time()-_t2:.3f}s'); _t3 = time.time()
 
         ######## animate ########
         if flag_is_driving_video or (flag_is_source_video and not flag_is_driving_video):
@@ -447,6 +453,8 @@ class LivePortraitPipeline(object):
                 else:
                     I_p_pstbk = paste_back(I_p_i, crop_info['M_c2o'], source_rgb_lst[0], mask_ori_float)
                 I_p_pstbk_lst.append(I_p_pstbk)
+        _elapsed_anim = time.time() - _t3
+        log(f'[TIMER] {n_frames} frames animated in {_elapsed_anim:.3f}s ({n_frames/_elapsed_anim:.1f} fps)'); _t4 = time.time()
 
         mkdir(args.output_dir)
         wfp_concat = None
@@ -487,6 +495,8 @@ class LivePortraitPipeline(object):
                 images2video(I_p_pstbk_lst, wfp=wfp, fps=output_fps)
             else:
                 images2video(I_p_lst, wfp=wfp, fps=output_fps)
+            log(f'[TIMER] Video assembled (FFmpeg) in {time.time()-_t4:.3f}s')
+            log(f'[TIMER] Total pipeline: {time.time()-_t0:.3f}s')
 
             ######### build the final result #########
             if flag_source_has_audio or flag_driving_has_audio:
@@ -526,6 +536,8 @@ class LivePortraitPipeline(object):
         inf_cfg = self.live_portrait_wrapper.inference_cfg
         device = self.live_portrait_wrapper.device
         crop_cfg = self.cropper.crop_cfg
+        _t0 = time.time()
+        log(f'[TIMER] Pipeline start')
 
         ######## load source input ########
         flag_is_source_video = False
@@ -543,6 +555,7 @@ class LivePortraitPipeline(object):
             log(f"Load source video from {args.source}, FPS is {source_fps}")
         else:
             raise Exception(f"Unknown source format: {args.source}")
+        log(f'[TIMER] Source loaded in {time.time()-_t0:.3f}s'); _t1 = time.time()
 
         ######## process driving info ########
         flag_load_from_template = is_template(args.driving)
@@ -599,6 +612,7 @@ class LivePortraitPipeline(object):
         if not flag_is_driving_video:
             c_d_eyes_lst = c_d_eyes_lst * n_frames
             c_d_lip_lst = c_d_lip_lst * n_frames
+        log(f'[TIMER] Driving template ready in {time.time()-_t1:.3f}s'); _t2 = time.time()
 
         ######## process source ########
         R_d_0, x_d_0_info = None, None
@@ -674,6 +688,7 @@ class LivePortraitPipeline(object):
                     lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio_tensor_before_animation)
             if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
                 mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(source_rgb_lst[0].shape[1], source_rgb_lst[0].shape[0]))
+        log(f'[TIMER] Source processed (crop + features) in {time.time()-_t2:.3f}s'); _t3 = time.time()
 
         ######## frame generator ########
         def _generate_frames():
@@ -684,6 +699,7 @@ class LivePortraitPipeline(object):
             c_d_eye_before_animation_frame_zero = None
 
             for i in range(n_frames):
+                _tf = time.time()
                 if flag_is_source_video:
                     x_s_info_i = source_template_dct['motion'][i]
                     x_s_info_i = dct2device(x_s_info_i, device)
@@ -838,15 +854,25 @@ class LivePortraitPipeline(object):
                         x_d_i_new = self.live_portrait_wrapper.stitching(x_s_use, x_d_i_new)
 
                 x_d_i_new = x_s_use + (x_d_i_new - x_s_use) * inf_cfg.driving_multiplier
+                _tw = time.time()
                 out = self.live_portrait_wrapper.warp_decode(f_s_use, x_s_use, x_d_i_new)
                 I_p_i = self.live_portrait_wrapper.parse_output(out['out'])[0]
+                _td = time.time()
 
                 if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
+                    _tp = time.time()
                     if flag_is_source_video:
-                        yield paste_back(I_p_i, source_M_c2o_lst[i], source_rgb_lst[i], mask_ori_float)
+                        frame = paste_back(I_p_i, source_M_c2o_lst[i], source_rgb_lst[i], mask_ori_float)
                     else:
-                        yield paste_back(I_p_i, crop_info['M_c2o'], source_rgb_lst[0], mask_ori_float)
+                        frame = paste_back(I_p_i, crop_info['M_c2o'], source_rgb_lst[0], mask_ori_float)
+                    _tend = time.time()
+                    log(f'[TIMER] Frame {i+1}/{n_frames} — motion: {_tw-_tf:.3f}s | warp+decode: {_td-_tw:.3f}s | paste_back: {_tend-_tp:.3f}s | total: {_tend-_tf:.3f}s')
+                    yield frame
                 else:
+                    _tend = time.time()
+                    log(f'[TIMER] Frame {i+1}/{n_frames} — motion: {_tw-_tf:.3f}s | warp+decode: {_td-_tw:.3f}s | total: {_tend-_tf:.3f}s')
                     yield I_p_i
+            _elapsed_gen = time.time() - _t3
+            log(f'[TIMER] All {n_frames} frames generated in {_elapsed_gen:.3f}s ({n_frames/_elapsed_gen:.1f} fps)')
 
         return _generate_frames(), output_fps

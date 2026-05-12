@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 import pickle
-import shutil
 import tempfile
 
-from starlette.background import BackgroundTask
-from fastapi.responses import FileResponse
+import cv2
+from fastapi.responses import Response
 
 from src.config.argument_config import ArgumentConfig
 from sdk.controllers.liveportrait import _get_pipeline
@@ -21,12 +20,11 @@ _FPS = 25
 _NEUTRAL_SECONDS = 2
 
 
-def run_liveportrait() -> FileResponse:
+def run_liveportrait() -> Response:
     keyframes = neutral_keyframes(seconds=_NEUTRAL_SECONDS, fps=_FPS)
     keyframes = add_blinks(keyframes, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
 
-    out_dir = tempfile.mkdtemp()
     tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
     try:
         pickle.dump(template, tpl_file)
@@ -35,15 +33,12 @@ def run_liveportrait() -> FileResponse:
         args = ArgumentConfig(
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
-            output_dir=out_dir,
+            output_dir=tempfile.mkdtemp(),
         )
-        wfp, _ = _get_pipeline().execute(args)
+        frame_gen, _ = _get_pipeline().execute_streaming(args)
+        frame = next(frame_gen)  # RGB uint8 HxWx3
     finally:
         os.unlink(tpl_file.name)
 
-    return FileResponse(
-        wfp,
-        media_type="video/mp4",
-        filename="animated.mp4",
-        background=BackgroundTask(shutil.rmtree, out_dir, ignore_errors=True),
-    )
+    _, buf = cv2.imencode(".jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
