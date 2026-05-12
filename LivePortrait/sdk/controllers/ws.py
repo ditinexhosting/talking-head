@@ -3,7 +3,8 @@ import uuid
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from controllers.tts import text_to_speech_kokoro, text_to_speech_kokoro_sample
+from sdk.controllers.tts import text_to_speech_kokoro, text_to_speech_kokoro_sample
+from sdk.controllers.streamFrame import stream_frame
 
 
 class ConnectionManager:
@@ -67,6 +68,28 @@ class WebSocketConnection:
 
                 #await text_to_speech_kokoro(self, text)
                 await text_to_speech_kokoro_sample(self)
+                await self.send_json({"session_id": self.session_id, "event": "done"})
+        except WebSocketDisconnect:
+            await self.close()
+
+    async def run_viseme2video(self):
+        await self.accept()
+        await self.send_json({"session_id": self.session_id, "event": "connected"})
+        try:
+            while True:
+                raw = await self.receive()
+                try:
+                    data = json.loads(raw)
+                    text = data.get("visemes", None)
+                except (json.JSONDecodeError, AttributeError):
+                    await self.send_json({"session_id": self.session_id, "error": "invalid JSON"})
+                    continue
+
+                if text is None:
+                    await self.send_json({"session_id": self.session_id, "error": "missing 'visemes' field"})
+                    continue
+
+                await stream_frame(self)
                 await self.send_json({"session_id": self.session_id, "event": "done"})
         except WebSocketDisconnect:
             await self.close()

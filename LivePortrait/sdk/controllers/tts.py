@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from controllers.speech2video import speech_to_video
+from sdk.controllers.speech2videourl import speech_to_video
 
 if TYPE_CHECKING:
-    from controllers.ws import WebSocketConnection
+    from sdk.controllers.ws import WebSocketConnection
 
 _ASSETS = Path(__file__).parent.parent / "assets"
 _MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
@@ -161,7 +161,8 @@ async def text_to_speech_kokoro(
         pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
         audio_bytes = pcm.tobytes()
         (_SAMPLE_DIR / "visemes_debug.json").write_text(json.dumps({"visemes": visemes}, indent=2))
-        video_bytes = await speech_to_video(visemes) if visemes else None
+        #video_bytes = await speech_to_video(visemes) if visemes else None
+        video_bytes = None
 
         sample_payload = {
             "audio": {
