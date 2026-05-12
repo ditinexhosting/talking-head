@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from sdk.controllers.rest import get_root, get_health
-from sdk.controllers.speech2video.video import run_liveportrait
+from sdk.controllers.speech2video.video import run_liveportrait, run_liveportrait_video
 
 router = APIRouter(prefix="/api", tags=["rest"])
 
