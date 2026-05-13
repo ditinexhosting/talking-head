@@ -88,8 +88,8 @@ class WebSocketConnection:
                 if text is None:
                     await self.send_json({"session_id": self.session_id, "error": "missing 'visemes' field"})
                     continue
-
+                await self.send_json({"session_id": self.session_id, "event": "frame_chunk_start"})
                 await stream_frame(self)
-                await self.send_json({"session_id": self.session_id, "event": "done"})
+                await self.send_json({"session_id": self.session_id, "event": "frame_chunk_end"})
         except WebSocketDisconnect:
             await self.close()

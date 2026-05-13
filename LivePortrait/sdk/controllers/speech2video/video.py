@@ -5,13 +5,24 @@ import itertools
 import os
 import pickle
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
+import pillow_avif  # registers AVIF format with Pillow
 from PIL import Image
 from fastapi.responses import FileResponse, Response
 
 from src.config.argument_config import ArgumentConfig
 from sdk.controllers.liveportrait import _get_pipeline
 from sdk.controllers.speech2video.motion import neutral_keyframes, build_template, add_blinks, add_talks
+
+_encoder_pool = ThreadPoolExecutor(max_workers=2)
+
+
+def _encode_avif(frame_np, quality=60):
+    buf = io.BytesIO()
+    Image.fromarray(frame_np).save(buf, format="AVIF", quality=quality)
+    return buf.getvalue()
+
 
 _DEFAULT_SOURCE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -110,8 +121,38 @@ def run_liveportrait() -> Response:
 
     img = Image.fromarray(frame)
     buf = io.BytesIO()
-    img.save(buf, format="WEBP", quality=80, method=4)
-    return Response(content=buf.getvalue(), media_type="image/webp")
+    img.save(buf, format="AVIF", quality=60)
+    return Response(content=buf.getvalue(), media_type="image/avif")
+
+
+def run_liveportrait_stream():
+    _total_frames = round(_VISEME_SEQUENCE["visemes"][-1]["end"] * _FPS) + 15
+    _total_seconds = _total_frames / _FPS
+    keyframes = neutral_keyframes(seconds=_total_seconds, fps=_FPS)
+    keyframes = add_blinks(keyframes, fps=_FPS)
+    keyframes = add_talks(keyframes, _VISEME_SEQUENCE["visemes"], fps=_FPS)
+    template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
+
+    tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
+    try:
+        pickle.dump(template, tpl_file)
+        tpl_file.close()
+
+        args = ArgumentConfig(
+            source=_DEFAULT_SOURCE,
+            driving=tpl_file.name,
+            output_dir=tempfile.mkdtemp(),
+        )
+        frame_gen, _ = _get_pipeline().execute_streaming(args)
+        pending = []
+        for frame in frame_gen:
+            pending.append(_encoder_pool.submit(_encode_avif, frame, 60))
+            while pending and pending[0].done():
+                yield pending.pop(0).result()
+        for future in pending:
+            yield future.result()
+    finally:
+        os.unlink(tpl_file.name)
 
 
 def run_liveportrait_video() -> FileResponse:

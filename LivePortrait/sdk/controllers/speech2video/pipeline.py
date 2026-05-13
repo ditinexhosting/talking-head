@@ -691,6 +691,8 @@ class LivePortraitPipeline(object):
         log(f'[TIMER] Source processed (crop + features) in {time.time()-_t2:.3f}s'); _t3 = time.time()
 
         ######## frame generator ########
+        BATCH_SIZE = 3
+
         def _generate_frames():
             nonlocal R_d_0, x_d_0_info, lip_delta_before_animation, eye_delta_before_animation, mask_ori_float
             x_d_0_new = None
@@ -698,8 +700,9 @@ class LivePortraitPipeline(object):
             combined_eye_ratio_tensor_frame_zero = None
             c_d_eye_before_animation_frame_zero = None
 
+            _f_s_batch, _x_s_batch, _x_d_batch, _batch_meta = [], [], [], []
+
             for i in range(n_frames):
-                _tf = time.time()
                 if flag_is_source_video:
                     x_s_info_i = source_template_dct['motion'][i]
                     x_s_info_i = dct2device(x_s_info_i, device)
@@ -854,24 +857,40 @@ class LivePortraitPipeline(object):
                         x_d_i_new = self.live_portrait_wrapper.stitching(x_s_use, x_d_i_new)
 
                 x_d_i_new = x_s_use + (x_d_i_new - x_s_use) * inf_cfg.driving_multiplier
-                _tw = time.time()
-                out = self.live_portrait_wrapper.warp_decode(f_s_use, x_s_use, x_d_i_new)
-                I_p_i = self.live_portrait_wrapper.parse_output(out['out'])[0]
-                _td = time.time()
 
-                if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
-                    _tp = time.time()
-                    if flag_is_source_video:
-                        frame = paste_back(I_p_i, source_M_c2o_lst[i], source_rgb_lst[i], mask_ori_float)
-                    else:
-                        frame = paste_back(I_p_i, crop_info['M_c2o'], source_rgb_lst[0], mask_ori_float)
-                    _tend = time.time()
-                    log(f'[TIMER] Frame {i+1}/{n_frames} — motion: {_tw-_tf:.3f}s | warp+decode: {_td-_tw:.3f}s | paste_back: {_tend-_tp:.3f}s | total: {_tend-_tf:.3f}s')
-                    yield frame
+                _f_s_batch.append(f_s_use)
+                _x_s_batch.append(x_s_use)
+                _x_d_batch.append(x_d_i_new)
+                _batch_meta.append((i, mask_ori_float))
+
+                if len(_x_d_batch) < BATCH_SIZE and i < n_frames - 1:
+                    continue
+
+                B = len(_x_d_batch)
+                if flag_is_source_video:
+                    f_s_b = torch.cat(_f_s_batch, dim=0)
+                    x_s_b = torch.cat(_x_s_batch, dim=0)
                 else:
-                    _tend = time.time()
-                    log(f'[TIMER] Frame {i+1}/{n_frames} — motion: {_tw-_tf:.3f}s | warp+decode: {_td-_tw:.3f}s | total: {_tend-_tf:.3f}s')
-                    yield I_p_i
+                    f_s_b = _f_s_batch[0].expand(B, *_f_s_batch[0].shape[1:])
+                    x_s_b = _x_s_batch[0].expand(B, *_x_s_batch[0].shape[1:])
+                x_d_b = torch.cat(_x_d_batch, dim=0)
+
+                out = self.live_portrait_wrapper.warp_decode(f_s_b, x_s_b, x_d_b)
+                batch_frames = self.live_portrait_wrapper.parse_output(out['out'])
+
+                for j in range(B):
+                    fi, mof = _batch_meta[j]
+                    I_p = batch_frames[j]
+                    if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
+                        if flag_is_source_video:
+                            yield paste_back(I_p, source_M_c2o_lst[fi], source_rgb_lst[fi], mof)
+                        else:
+                            yield paste_back(I_p, crop_info['M_c2o'], source_rgb_lst[0], mof)
+                    else:
+                        yield I_p
+
+                _f_s_batch, _x_s_batch, _x_d_batch, _batch_meta = [], [], [], []
+
             _elapsed_gen = time.time() - _t3
             log(f'[TIMER] All {n_frames} frames generated in {_elapsed_gen:.3f}s ({n_frames/_elapsed_gen:.1f} fps)')
 
