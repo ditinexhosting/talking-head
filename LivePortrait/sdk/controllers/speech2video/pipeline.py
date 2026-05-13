@@ -25,7 +25,7 @@ from src.utils.io import load_image_rgb, load_video, resize_to_limit, dump, load
 from src.utils.helper import mkdir, basename, dct2device, is_video, is_template, remove_suffix, is_image, is_square_video, calc_motion_multiplier
 from src.utils.filter import smooth
 from src.utils.rprint import rlog as log
-from src.live_portrait_wrapper import LivePortraitWrapper
+from sdk.controllers.speech2video.live_portrait_wrapper import LivePortraitWrapper
 
 
 def make_abs_path(fn):
@@ -702,7 +702,7 @@ class LivePortraitPipeline(object):
         log(f'[TIMER] Source processed (crop + features) in {time.time()-_t2:.3f}s'); _t3 = time.time()
 
         ######## frame generator ########
-        BATCH_SIZE = 3
+        BATCH_SIZE = 1
 
         def _generate_frames():
             nonlocal R_d_0, x_d_0_info, lip_delta_before_animation, eye_delta_before_animation, mask_ori_float

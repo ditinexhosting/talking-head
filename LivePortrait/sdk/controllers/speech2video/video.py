@@ -95,6 +95,28 @@ _VISEME_SEQUENCE = {
 }
 
 
+def warmup_stream(pipeline) -> None:
+    keyframes = neutral_keyframes(seconds=2 / _FPS, fps=_FPS)
+    template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
+
+    tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
+    try:
+        pickle.dump(template, tpl_file)
+        tpl_file.close()
+
+        args = ArgumentConfig(
+            source=_DEFAULT_SOURCE,
+            driving=tpl_file.name,
+            output_dir=tempfile.mkdtemp(),
+            flag_pasteback=False,
+        )
+        frame_gen, _ = pipeline.execute_streaming(args)
+        for _ in frame_gen:
+            pass
+    finally:
+        os.unlink(tpl_file.name)
+
+
 def run_liveportrait() -> Response:
     _total_frames = round(_VISEME_SEQUENCE["visemes"][-1]["end"] * _FPS) + 15
     _total_seconds = _total_frames / _FPS
