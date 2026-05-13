@@ -112,6 +112,7 @@ def run_liveportrait() -> Response:
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
+            flag_pasteback=False,
         )
         frame_gen, _ = _get_pipeline().execute_streaming(args)
         # grab frame index 50 (2s into a 25fps stream) — first frame after the 2s neutral lead-in
@@ -142,6 +143,7 @@ def run_liveportrait_stream():
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
+            flag_pasteback=False,
         )
         frame_gen, _ = _get_pipeline().execute_streaming(args)
         pending = []
