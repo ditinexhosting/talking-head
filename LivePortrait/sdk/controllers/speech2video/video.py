@@ -67,6 +67,8 @@ _DEFAULT_SOURCE = os.path.join(
 )
 
 _FPS = 25
+_STREAM_CHUNK_SECONDS = 2
+_STREAM_CHUNK_FRAMES = max(1, round(_FPS * _STREAM_CHUNK_SECONDS))
 _NEUTRAL_SECONDS = 2
 
 _VISEME_SEQUENCE = {
@@ -236,9 +238,10 @@ def run_liveportrait_stream():
         height, width = first_frame.shape[:2]
 
         # One ffmpeg process for the entire stream. Init segment (ftyp+moov)
-        # is emitted once at the start; moof+mdat fragments follow every -g
-        # frames. Bytes are forwarded byte-for-byte to the WebSocket — MSE on
-        # the client side parses fragments incrementally.
+        # is emitted once at the start; moof+mdat fragments follow every
+        # _STREAM_CHUNK_FRAMES frames (2 seconds at the current FPS). Bytes are
+        # forwarded byte-for-byte to the WebSocket — MSE on the client side
+        # parses fragments incrementally.
         proc = subprocess.Popen(
             [
                 "ffmpeg",
@@ -253,7 +256,9 @@ def run_liveportrait_stream():
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
                 "-pix_fmt", "yuv420p",
-                "-g", "4",
+                "-g", str(_STREAM_CHUNK_FRAMES),
+                "-keyint_min", str(_STREAM_CHUNK_FRAMES),
+                "-sc_threshold", "0",
                 "-flush_packets", "1",
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
                 "-f", "mp4",
