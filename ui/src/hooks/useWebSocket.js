@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 export const useWebSocket = (url, onMessage) => {
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
+  const lastArrivalRef = useRef(0);
   const [status, setStatus] = useState("connecting");
 
   useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
@@ -14,7 +15,15 @@ export const useWebSocket = (url, onMessage) => {
 
     ws.onopen = () => setStatus("open");
     ws.onclose = () => setStatus("closed");
-    ws.onmessage = (e) => onMessageRef.current(e.data);
+    ws.onmessage = (e) => {
+      const now = performance.now();
+      const gap = lastArrivalRef.current ? now - lastArrivalRef.current : 0;
+      lastArrivalRef.current = now;
+      const isBin = e.data instanceof ArrayBuffer;
+      const size = isBin ? e.data.byteLength : e.data.length;
+      console.log(`[ws] ${isBin ? "bin" : "txt"} gap=${gap.toFixed(1)}ms size=${size}`);
+      onMessageRef.current(e.data);
+    };
 
     return () => ws.close();
   }, [url]);

@@ -1,13 +1,13 @@
 export default function Header({ status, sessionId }) {
   const dot =
     status === "open" ? "bg-emerald-400" :
-    status === "closed" ? "bg-red-500" :
-    "bg-amber-400 animate-pulse";
+      status === "closed" ? "bg-red-500" :
+        "bg-amber-400 animate-pulse";
 
   const label =
     status === "open" ? "Connected" :
-    status === "closed" ? "Disconnected" :
-    "Connecting…";
+      status === "closed" ? "Disconnected" :
+        "Connecting…";
 
   return (
     <header className="h-[8vh] min-h-14 flex items-center justify-between px-6 border-b border-zinc-800 bg-zinc-950 text-zinc-100">
@@ -28,7 +28,7 @@ export default function Header({ status, sessionId }) {
         </div>
         {sessionId && (
           <span className="hidden sm:inline font-mono text-zinc-500">
-            {sessionId.slice(0, 8)}
+            : {sessionId}
           </span>
         )}
       </div>

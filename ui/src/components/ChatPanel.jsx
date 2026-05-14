@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function ChatPanel({
-  status,
-  isSpeaking,
-  hasSentences,
-  onSend,
-  onReplay,
-}) {
+export default function ChatPanel({ status, onSend, onReplay, canReplay }) {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
   const scrollRef = useRef(null);
@@ -15,7 +9,7 @@ export default function ChatPanel({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, isSpeaking]);
+  }, [messages]);
 
   const handleSend = () => {
     const trimmed = text.trim();
@@ -38,16 +32,8 @@ export default function ChatPanel({
 
   return (
     <aside className="w-full max-w-md border-l border-zinc-800 bg-zinc-950 text-zinc-100 flex flex-col">
-      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-zinc-800 flex items-center">
         <div className="text-sm font-semibold">Conversation</div>
-        <button
-          type="button"
-          className="text-xs px-2 py-1 rounded text-zinc-300 hover:text-white hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent"
-          disabled={!hasSentences}
-          onClick={onReplay}
-        >
-          Replay
-        </button>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -76,16 +62,6 @@ export default function ChatPanel({
             </div>
           </div>
         ))}
-
-        {isSpeaking && (
-          <div className="flex justify-start">
-            <div className="bg-zinc-800 rounded-2xl rounded-bl-sm px-3.5 py-2 text-sm text-zinc-300 flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-              <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: "120ms" }} />
-              <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: "240ms" }} />
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="p-3 border-t border-zinc-800">
@@ -99,6 +75,14 @@ export default function ChatPanel({
             onKeyDown={handleKeyDown}
             disabled={status !== "open"}
           />
+          <button
+            type="button"
+            onClick={onReplay}
+            disabled={!canReplay}
+            className="shrink-0 h-8 px-3 rounded-lg bg-zinc-700 text-white text-sm font-medium hover:bg-zinc-600 disabled:opacity-40 disabled:hover:bg-zinc-700"
+          >
+            Replay
+          </button>
           <button
             type="button"
             onClick={handleSend}
