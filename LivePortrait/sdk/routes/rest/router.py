@@ -1,0 +1,20 @@
+from fastapi import APIRouter
+from sdk.controllers.rest import get_root, get_health
+from sdk.controllers.speech2video.video import run_liveportrait, run_liveportrait_video
+
+router = APIRouter(prefix="/api", tags=["rest"])
+
+
+@router.get("/")
+def root():
+    return get_root()
+
+
+@router.get("/health")
+def health():
+    return get_health()
+
+
+@router.post("/animate")
+def animate():
+    return run_liveportrait()
