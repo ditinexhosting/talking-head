@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from sdk.controllers.speech2video.video import run_liveportrait_stream
@@ -10,30 +9,53 @@ from sdk.controllers.speech2video.video import run_liveportrait_stream
 if TYPE_CHECKING:
     from sdk.controllers.ws import WebSocketConnection
 
-_executor = ThreadPoolExecutor(max_workers=1)
+_END = object()
 
 
-def _run_pipeline(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> None:
-    for frame_bytes in run_liveportrait_stream():
-        asyncio.run_coroutine_threadsafe(queue.put(frame_bytes), loop)
-    asyncio.run_coroutine_threadsafe(queue.put(None), loop)  # signal end of stream
+def _next_frame(gen):
+    try:
+        return next(gen)
+    except StopIteration:
+        return _END
 
 
 async def stream_frame(conn: WebSocketConnection) -> None:
-    loop = asyncio.get_event_loop()
-    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=8)
-
-    loop.run_in_executor(_executor, _run_pipeline, queue, loop)
-
-    frame_count = 0
+    gen = run_liveportrait_stream()
+    chunk_count = 0
+    bytes_sent = 0
     t_start = time.perf_counter()
+
     while True:
-        frame_bytes = await queue.get()
-        if frame_bytes is None:
+        t_gen_start = time.perf_counter()
+        chunk_bytes = await asyncio.to_thread(_next_frame, gen)
+        gen_ms = (time.perf_counter() - t_gen_start) * 1000.0
+
+        if chunk_bytes is _END:
             break
-        await conn.send_bytes(frame_bytes)
-        frame_count += 1
+
+        t_send_start = time.perf_counter()
+        await conn.send_bytes(chunk_bytes)
+        send_ms = (time.perf_counter() - t_send_start) * 1000.0
+        # Force an event-loop yield so the ASGI send drains immediately and
+        # nothing further upstream can coalesce writes into the same tick.
+        await asyncio.sleep(0)
+
+        print(
+            f"[ws] chunk={chunk_count:04d} gen={gen_ms:7.2f}ms "
+            f"send={send_ms:7.2f}ms size={len(chunk_bytes)}B",
+            flush=True,
+        )
+        chunk_count += 1
+        bytes_sent += len(chunk_bytes)
 
     elapsed = time.perf_counter() - t_start
-    fps = frame_count / elapsed if elapsed > 0 else 0
-    print(f"[stream] {frame_count} frames in {elapsed:.2f}s → {fps:.1f} fps", flush=True)
+    # ~8 video frames per fMP4 fragment (server uses -g 8). This is an
+    # approximation — for the authoritative frame count see the [stream] DONE
+    # line printed by run_liveportrait_stream.
+    approx_frames = chunk_count * 8
+    fps = approx_frames / elapsed if elapsed > 0 else 0.0
+    print(
+        f"[ws] sent {chunk_count} fMP4 chunks ({bytes_sent}B) in "
+        f"{elapsed * 1000.0:.2f}ms ({elapsed:.2f}s) → ~{fps:.1f} fps",
+        flush=True,
+    )

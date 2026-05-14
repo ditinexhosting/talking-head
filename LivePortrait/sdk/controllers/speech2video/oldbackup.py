@@ -4,10 +4,7 @@ import io
 import itertools
 import os
 import pickle
-import subprocess
 import tempfile
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pillow_avif  # registers AVIF format with Pillow
@@ -25,40 +22,6 @@ def _encode_webp(frame_np, quality=80):
     buf = io.BytesIO()
     Image.fromarray(frame_np).save(buf, format="WEBP", quality=quality, method=4)
     return buf.getvalue()
-
-
-def _encode_fmp4(frames, fps=25):
-    # Fragmented MP4: empty_moov writes the init segment (ftyp+moov) inline,
-    # frag_keyframe starts a new moof+mdat fragment on every keyframe. The
-    # resulting bytes are a single self-contained, playable fMP4 file.
-    # Encoder: NVIDIA NVENC (h264_nvenc) — dedicated GPU silicon, ~1000+ fps
-    # at 256x256, runs in parallel with model inference on CUDA cores.
-    height, width = frames[0].shape[:2]
-    proc = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel", "error",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
-            "-s", f"{width}x{height}",
-            "-r", str(fps),
-            "-i", "pipe:0",
-            "-c:v", "h264_nvenc",
-            "-preset", "p1",
-            "-tune", "ull",
-            "-rc", "cbr",
-            "-b:v", "2M",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4",
-            "pipe:1",
-        ],
-        input=b"".join(f.tobytes() for f in frames),
-        capture_output=True,
-        check=True,
-    )
-    return proc.stdout
 
 
 _DEFAULT_SOURCE = os.path.join(
@@ -155,8 +118,6 @@ def warmup_stream(pipeline) -> None:
 
 
 def run_liveportrait() -> Response:
-    t_req_start = time.perf_counter()
-
     _total_frames = round(_VISEME_SEQUENCE["visemes"][-1]["end"] * _FPS) + 15
     _total_seconds = _total_frames / _FPS
     keyframes = neutral_keyframes(seconds=_total_seconds, fps=_FPS)
@@ -176,38 +137,18 @@ def run_liveportrait() -> Response:
             flag_pasteback=False,
         )
         frame_gen, _ = _get_pipeline().execute_streaming(args)
-
-        # TEMPORARY: cap at the first 25 frames; encode and return the first 8
-        # as a single fMP4 chunk. Remaining frames within the 25 are discarded
-        # — full-stream handling comes later.
-        frames = []
-        t_gen_start = time.perf_counter()
-        for frame in itertools.islice(frame_gen, 25):
-            frames.append(frame)
-            if len(frames) >= 8:
-                break
-        gen_ms = (time.perf_counter() - t_gen_start) * 1000.0
+        # grab frame index 50 (2s into a 25fps stream) — first frame after the 2s neutral lead-in
+        frame = next(itertools.islice(frame_gen, 50, None))
     finally:
         os.unlink(tpl_file.name)
 
-    t_enc_start = time.perf_counter()
-    chunk = _encode_fmp4(frames, fps=_FPS)
-    enc_ms = (time.perf_counter() - t_enc_start) * 1000.0
-
-    total_ms = (time.perf_counter() - t_req_start) * 1000.0
-    print(
-        f"[liveportrait] frames={len(frames)} gen={gen_ms:7.2f}ms "
-        f"encode={enc_ms:7.2f}ms total={total_ms:7.2f}ms "
-        f"chunk={len(chunk)}B",
-        flush=True,
-    )
-
-    return Response(content=chunk, media_type="video/mp4")
+    img = Image.fromarray(frame)
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=80, method=4)
+    return Response(content=buf.getvalue(), media_type="image/webp")
 
 
 def run_liveportrait_stream():
-    t_start = time.perf_counter()
-
     _total_frames = round(_VISEME_SEQUENCE["visemes"][-1]["end"] * _FPS) + 15
     _total_seconds = _total_frames / _FPS
     keyframes = neutral_keyframes(seconds=_total_seconds, fps=_FPS)
@@ -216,7 +157,6 @@ def run_liveportrait_stream():
     template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
 
     tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
-    proc = None
     try:
         pickle.dump(template, tpl_file)
         tpl_file.close()
@@ -228,112 +168,14 @@ def run_liveportrait_stream():
             flag_pasteback=False,
         )
         frame_gen, _ = _get_pipeline().execute_streaming(args)
-
-        try:
-            first_frame = next(frame_gen)
-        except StopIteration:
-            return
-        height, width = first_frame.shape[:2]
-
-        # One ffmpeg process for the entire stream. Init segment (ftyp+moov)
-        # is emitted once at the start; moof+mdat fragments follow every -g
-        # frames. Bytes are forwarded byte-for-byte to the WebSocket — MSE on
-        # the client side parses fragments incrementally.
-        proc = subprocess.Popen(
-            [
-                "ffmpeg",
-                "-y",
-                "-loglevel", "error",
-                "-f", "rawvideo",
-                "-pix_fmt", "rgb24",
-                "-s", f"{width}x{height}",
-                "-r", str(_FPS),
-                "-i", "pipe:0",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-pix_fmt", "yuv420p",
-                "-g", "4",
-                "-flush_packets", "1",
-                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-                "-f", "mp4",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=0,
-        )
-
-        stats = {"frames_in": 0}
-
-        def _feed_ffmpeg():
-            try:
-                proc.stdin.write(first_frame.tobytes())
-                stats["frames_in"] = 1
-                for frame in frame_gen:
-                    proc.stdin.write(frame.tobytes())
-                    stats["frames_in"] += 1
-            except (BrokenPipeError, OSError):
-                pass
-            finally:
-                try:
-                    proc.stdin.close()
-                except (BrokenPipeError, OSError):
-                    pass
-
-        writer = threading.Thread(target=_feed_ffmpeg, daemon=True)
-        writer.start()
-
-        chunk_count = 0
-        bytes_out = 0
-        first_chunk_ms = None
-        last_t = t_start
-        while True:
-            t_read_start = time.perf_counter()
-            data = proc.stdout.read(65536)
-            if not data:
-                break
-            now = time.perf_counter()
-            chunk_count += 1
-            bytes_out += len(data)
-            elapsed_ms = (now - t_start) * 1000.0
-            gap_ms = (now - last_t) * 1000.0
-            last_t = now
-            if first_chunk_ms is None:
-                first_chunk_ms = elapsed_ms
-                print(
-                    f"[stream] FIRST chunk at {elapsed_ms:.2f}ms "
-                    f"(frames_in={stats['frames_in']}, size={len(data)}B)",
-                    flush=True,
-                )
-            print(
-                f"[stream] chunk={chunk_count:04d} size={len(data):6d}B "
-                f"gap={gap_ms:7.2f}ms elapsed={elapsed_ms:8.2f}ms "
-                f"frames_in={stats['frames_in']}",
-                flush=True,
-            )
-            yield data
-
-        writer.join(timeout=10)
-        proc.wait(timeout=5)
-
-        total_s = time.perf_counter() - t_start
-        fps = stats["frames_in"] / total_s if total_s > 0 else 0.0
-        print(
-            f"[stream] DONE frames={stats['frames_in']} chunks={chunk_count} "
-            f"bytes={bytes_out} first_chunk={first_chunk_ms:.2f}ms "
-            f"total={total_s * 1000.0:.2f}ms ({total_s:.2f}s) "
-            f"→ {fps:.1f} fps",
-            flush=True,
-        )
+        pending = []
+        for frame in frame_gen:
+            pending.append(_encoder_pool.submit(_encode_webp, frame, 80))
+            while pending and pending[0].done():
+                yield pending.pop(0).result()
+        for future in pending:
+            yield future.result()
     finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-                proc.wait(timeout=2)
-            except Exception:
-                pass
         os.unlink(tpl_file.name)
 
 
