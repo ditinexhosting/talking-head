@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from sdk.controllers.rest import get_root, get_health
 from sdk.controllers.speech2video.video import run_liveportrait, run_liveportrait_video
+from sdk.controllers.webrtc import webrtc_offer, OfferPayload, AnswerPayload
 
 router = APIRouter(prefix="/api", tags=["rest"])
 
@@ -18,3 +19,8 @@ def health():
 @router.post("/animate")
 def animate():
     return run_liveportrait()
+
+
+@router.post("/webrtc/offer", response_model=AnswerPayload)
+async def webrtc_offer_route(payload: OfferPayload):
+    return await webrtc_offer(payload)
