@@ -4,7 +4,6 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from sdk.controllers.rest import get_root, get_health
-from sdk.controllers.speech2video.video import run_liveportrait, run_liveportrait_video
 from sdk.controllers.livekit_agent import run_agent
 
 router = APIRouter(prefix="/api", tags=["rest"])
@@ -18,11 +17,6 @@ def root():
 @router.get("/health")
 def health():
     return get_health()
-
-
-@router.post("/animate")
-def animate():
-    return run_liveportrait()
 
 
 class JoinBody(BaseModel):

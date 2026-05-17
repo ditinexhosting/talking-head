@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from sdk.controllers.speech2videourl import speech_to_video
 
 if TYPE_CHECKING:
     from sdk.controllers.ws import WebSocketConnection

@@ -91,5 +91,15 @@ export function useLiveKit() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { videoRef, status };
+  const sendText = useCallback((text) => {
+    const room = roomRef.current;
+    if (!room || room.state !== "connected") return false;
+    const data = new TextEncoder().encode(text);
+    room.localParticipant
+      .publishData(data, { reliable: true, topic: "chat" })
+      .catch((err) => console.error("[livekit] publishData failed:", err));
+    return true;
+  }, []);
+
+  return { videoRef, status, sendText };
 }
