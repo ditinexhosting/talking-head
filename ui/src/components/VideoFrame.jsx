@@ -8,6 +8,7 @@ export default function VideoFrame({ attachVideo }) {
     >
       <video
         ref={attachVideo}
+        autoPlay
         muted
         playsInline
         className="relative max-h-full max-w-full object-contain"

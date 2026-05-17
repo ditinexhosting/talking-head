@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function ChatPanel({ status, onSend, onReplay, canReplay }) {
+export default function ChatPanel({ status, onSend }) {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState([]);
   const scrollRef = useRef(null);
@@ -11,9 +11,11 @@ export default function ChatPanel({ status, onSend, onReplay, canReplay }) {
     }
   }, [messages]);
 
+  const busy = status === "connecting";
+
   const handleSend = () => {
     const trimmed = text.trim();
-    if (!trimmed || status !== "open") return;
+    if (!trimmed || busy) return;
     if (onSend(trimmed)) {
       setMessages((prev) => [
         ...prev,
@@ -69,24 +71,16 @@ export default function ChatPanel({ status, onSend, onReplay, canReplay }) {
           <textarea
             className="flex-1 resize-none bg-transparent outline-none text-sm placeholder:text-zinc-500 max-h-32"
             rows={1}
-            placeholder={status === "open" ? "Type a message…" : "Connecting…"}
+            placeholder={busy ? "Connecting…" : "Type a message…"}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={status !== "open"}
+            disabled={busy}
           />
           <button
             type="button"
-            onClick={onReplay}
-            disabled={!canReplay}
-            className="shrink-0 h-8 px-3 rounded-lg bg-zinc-700 text-white text-sm font-medium hover:bg-zinc-600 disabled:opacity-40 disabled:hover:bg-zinc-700"
-          >
-            Replay
-          </button>
-          <button
-            type="button"
             onClick={handleSend}
-            disabled={status !== "open" || !text.trim()}
+            disabled={busy || !text.trim()}
             className="shrink-0 h-8 px-3 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 disabled:opacity-40 disabled:hover:bg-violet-600"
           >
             Send

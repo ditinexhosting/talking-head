@@ -1,13 +1,15 @@
-export default function Header({ status, sessionId }) {
+export default function Header({ status }) {
   const dot =
     status === "open" ? "bg-emerald-400" :
       status === "closed" ? "bg-red-500" :
-        "bg-amber-400 animate-pulse";
+        status === "connecting" ? "bg-amber-400 animate-pulse" :
+          "bg-zinc-500";
 
   const label =
-    status === "open" ? "Connected" :
+    status === "open" ? "Streaming" :
       status === "closed" ? "Disconnected" :
-        "Connecting…";
+        status === "connecting" ? "Connecting…" :
+          "Idle";
 
   return (
     <header className="h-[8vh] min-h-14 flex items-center justify-between px-6 border-b border-zinc-800 bg-zinc-950 text-zinc-100">
@@ -26,11 +28,6 @@ export default function Header({ status, sessionId }) {
           <span className={`h-2 w-2 rounded-full ${dot}`} />
           <span className="text-zinc-300">{label}</span>
         </div>
-        {sessionId && (
-          <span className="hidden sm:inline font-mono text-zinc-500">
-            : {sessionId}
-          </span>
-        )}
       </div>
     </header>
   );
