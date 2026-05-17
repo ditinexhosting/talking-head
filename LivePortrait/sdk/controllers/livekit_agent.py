@@ -32,7 +32,7 @@ def generate_livekit_token(identity: str, room_id: str) -> str:
             room_join=True,
             room=room_id,
             can_publish=True,
-            can_subscribe=False,
+            can_subscribe=True,
         ))
         .with_ttl(timedelta(hours=2))
         .to_jwt()
@@ -108,11 +108,14 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
 
     @room.on("data_received")
     def on_data(packet: rtc.DataPacket) -> None:
+        logger.info("[agent] data_received topic=%r len=%d", packet.topic, len(packet.data))
         if packet.topic == "chat":
             try:
-                loop.call_soon_threadsafe(chat_queue.put_nowait, packet.data.decode("utf-8"))
-            except Exception:
-                pass
+                text = packet.data.decode("utf-8")
+                logger.info("[agent] chat enqueued: %r", text)
+                loop.call_soon_threadsafe(chat_queue.put_nowait, text)
+            except Exception as exc:
+                logger.error("[agent] chat decode error: %s", exc)
 
     @room.on("disconnected")
     def on_disconnect() -> None:
@@ -154,7 +157,7 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
 
             if chat_task in done:
                 text = chat_task.result()
-                logger.info("[agent] chat: %r", text)
+                logger.info("[agent] chat dequeued — switching to liveportrait: %r", text)
                 # Cancel rainbow
                 stream_task.cancel()
                 try:

@@ -93,11 +93,17 @@ export function useLiveKit() {
 
   const sendText = useCallback((text) => {
     const room = roomRef.current;
-    if (!room || room.state !== "connected") return false;
+    console.log("[sendText] room:", room?.state, "text:", text);
+    if (!room || room.state !== "connected") {
+      console.warn("[sendText] room not connected — dropping");
+      return false;
+    }
     const data = new TextEncoder().encode(text);
+    console.log("[sendText] publishing", data.byteLength, "bytes, topic=chat");
     room.localParticipant
       .publishData(data, { reliable: true, topic: "chat" })
-      .catch((err) => console.error("[livekit] publishData failed:", err));
+      .then(() => console.log("[sendText] publishData resolved"))
+      .catch((err) => console.error("[sendText] publishData failed:", err));
     return true;
   }, []);
 
