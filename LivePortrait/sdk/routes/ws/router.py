@@ -8,8 +8,3 @@ router = APIRouter(tags=["websocket"])
 async def echo(ws: WebSocket):
     conn = WebSocketConnection(ws)
     await conn.run_tts()
-
-@router.websocket("/video")
-async def echo(ws: WebSocket):
-    conn = WebSocketConnection(ws)
-    await conn.run_viseme2video()
