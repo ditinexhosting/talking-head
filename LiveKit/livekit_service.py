@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from livekit import api
 from livekit.api import AccessToken, VideoGrants, CreateRoomRequest
 
@@ -6,7 +7,7 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://livekit.ditinex.com")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "devsecret123changeme")
 
-TOKEN_TTL_SECONDS = 3600  # 1 hour
+TOKEN_TTL = timedelta(hours=1)
 
 
 async def create_room(room_id: str) -> None:
@@ -47,7 +48,7 @@ def generate_ui_token(room_id: str, user_id: str) -> str:
         .with_identity(user_id)
         .with_name(user_id)
         .with_grants(grants)
-        .with_ttl(TOKEN_TTL_SECONDS)
+        .with_ttl(TOKEN_TTL)
         .to_jwt()
     )
     return token
