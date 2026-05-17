@@ -19,16 +19,16 @@ uvicorn main:app --reload --host 0.0.0.0 --port 2000
 
 ## PyTorch (CUDA)
 
-The project requires PyTorch with GPU support. The environment has CUDA 12.8; use the cu124 wheels (CUDA is backward compatible).
+The project requires PyTorch with GPU support. The machine has an RTX 5070 Ti (Blackwell, sm_120) which requires cu128 wheels — cu124 will fail with "no kernel image available".
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
 Installed versions:
-- `torch==2.6.0+cu124`
-- `torchvision==0.21.0+cu124`
-- `torchaudio==2.6.0+cu124`
+- `torch==2.7.1+cu128`
+- `torchvision==0.22.1+cu128`
+- `torchaudio==2.7.1+cu128`
 
 ## Dependencies
 
