@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 
 const VPS_URL = "https://cargo.ditinex.com";
@@ -83,5 +83,13 @@ export function useLiveKit() {
     setStatus("idle");
   }, []);
 
-  return { videoRef, status, start, stop };
+  useEffect(() => {
+    start();
+    return () => {
+      stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { videoRef, status };
 }

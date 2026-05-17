@@ -1,13 +1,13 @@
 export default function Header({ status }) {
   const dot =
-    status === "open" ? "bg-emerald-400" :
-      status === "closed" ? "bg-red-500" :
+    status === "connected" ? "bg-emerald-400" :
+      status === "failed" ? "bg-red-500" :
         status === "connecting" ? "bg-amber-400 animate-pulse" :
           "bg-zinc-500";
 
   const label =
-    status === "open" ? "Streaming" :
-      status === "closed" ? "Disconnected" :
+    status === "connected" ? "Streaming" :
+      status === "failed" ? "Failed" :
         status === "connecting" ? "Connecting…" :
           "Idle";
 
