@@ -4,7 +4,7 @@ import os
 import httpx
 from fastapi import HTTPException
 
-GPU_SERVER_URL = os.getenv("GPU_SERVER_URL", "http://182.224.239.168:54582/api")
+GPU_SERVER_URL = os.getenv("GPU_SERVER_URL", "http://181.116.79.48:40517/api")
 GPU_REQUEST_TIMEOUT = 5.0  # seconds
 
 logger = logging.getLogger(__name__)
