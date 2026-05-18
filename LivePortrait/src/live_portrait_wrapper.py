@@ -62,8 +62,15 @@ class LivePortraitWrapper(object):
         # Optimize for inference
         if self.compile:
             torch._dynamo.config.suppress_errors = True  # Suppress errors and fall back to eager execution
+            self.appearance_feature_extractor = torch.compile(self.appearance_feature_extractor, mode='max-autotune')
+            self.motion_extractor = torch.compile(self.motion_extractor, mode='max-autotune')
             self.warping_module = torch.compile(self.warping_module, mode='max-autotune')
             self.spade_generator = torch.compile(self.spade_generator, mode='max-autotune')
+            if self.stitching_retargeting_module is not None:
+                for key in self.stitching_retargeting_module:
+                    self.stitching_retargeting_module[key] = torch.compile(
+                        self.stitching_retargeting_module[key], mode='max-autotune'
+                    )
 
         self.timer = Timer()
 
@@ -135,6 +142,8 @@ class LivePortraitWrapper(object):
         return: A dict contains keys: 'pitch', 'yaw', 'roll', 't', 'exp', 'scale', 'kp'
         """
         with torch.no_grad(), self.inference_ctx():
+            if self.compile:
+                torch.compiler.cudagraph_mark_step_begin()
             kp_info = self.motion_extractor(x)
 
             if self.inference_cfg.flag_use_half_precision:
@@ -219,7 +228,7 @@ class LivePortraitWrapper(object):
         """
         feat_eye = concat_feat(kp_source, eye_close_ratio)
 
-        with torch.no_grad():
+        with torch.no_grad(), self.inference_ctx():
             delta = self.stitching_retargeting_module['eye'](feat_eye)
 
         return delta.reshape(-1, kp_source.shape[1], 3)
@@ -232,7 +241,7 @@ class LivePortraitWrapper(object):
         """
         feat_lip = concat_feat(kp_source, lip_close_ratio)
 
-        with torch.no_grad():
+        with torch.no_grad(), self.inference_ctx():
             delta = self.stitching_retargeting_module['lip'](feat_lip)
 
         return delta.reshape(-1, kp_source.shape[1], 3)
@@ -245,7 +254,7 @@ class LivePortraitWrapper(object):
         """
         feat_stiching = concat_feat(kp_source, kp_driving)
 
-        with torch.no_grad():
+        with torch.no_grad(), self.inference_ctx():
             delta = self.stitching_retargeting_module['stitching'](feat_stiching)
 
         return delta
@@ -378,7 +387,14 @@ class LivePortraitWrapperAnimal(LivePortraitWrapper):
         # Optimize for inference
         if self.compile:
             torch._dynamo.config.suppress_errors = True  # Suppress errors and fall back to eager execution
+            self.appearance_feature_extractor = torch.compile(self.appearance_feature_extractor, mode='max-autotune')
+            self.motion_extractor = torch.compile(self.motion_extractor, mode='max-autotune')
             self.warping_module = torch.compile(self.warping_module, mode='max-autotune')
             self.spade_generator = torch.compile(self.spade_generator, mode='max-autotune')
+            if self.stitching_retargeting_module is not None:
+                for key in self.stitching_retargeting_module:
+                    self.stitching_retargeting_module[key] = torch.compile(
+                        self.stitching_retargeting_module[key], mode='max-autotune'
+                    )
 
         self.timer = Timer()

@@ -7,7 +7,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from sdk.controllers.rest import get_root, get_health
-from sdk.controllers.livekit_agent import run_agent
+from sdk.controllers.livekit.agent import run_agent
+from sdk.controllers.speech2video.video import capture_and_save_idle_frame
 
 router = APIRouter(prefix="/api", tags=["rest"])
 
@@ -33,6 +34,12 @@ async def join_room(body: JoinBody):
     return {"status": "ok"}
 
 
+# @router.post("/capture-idle")
+# def capture_idle():
+#     capture_and_save_idle_frame()
+#     return {"status": "ok"}
+
+
 _STREAM_CHUNK_FRAMES = 25
 
 
@@ -43,6 +50,7 @@ def animate():
     frame_gen = liveportrait_frame_gen()
     first_frame = next(frame_gen)
     height, width = first_frame.shape[:2]
+    print(f"[animate] frame shape={first_frame.shape} dtype={first_frame.dtype} ({width}x{height})")
 
     proc = subprocess.Popen(
         [

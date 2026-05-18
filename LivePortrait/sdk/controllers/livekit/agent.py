@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import colorsys
-import json
 import logging
 import os
 import threading
@@ -14,6 +13,9 @@ import numpy as np
 from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 
+from sdk.controllers.livekit.data_handlers import TOPIC_HANDLERS
+from sdk.controllers.livekit.util import idle_frame
+
 logger = logging.getLogger(__name__)
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://livekit.ditinex.com")
@@ -23,6 +25,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "devsecret123changeme")
 WIDTH, HEIGHT = 512, 512
 FPS = 25
 
+_RED_FRAME = bytes(np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), WIDTH * HEIGHT).tobytes())
 
 def generate_livekit_token(identity: str, room_id: str) -> str:
     return (
@@ -38,31 +41,6 @@ def generate_livekit_token(identity: str, room_id: str) -> str:
         .with_ttl(timedelta(hours=2))
         .to_jwt()
     )
-
-
-def _handle_chat(participant: str, text: str) -> None:
-    logger.info("[agent] chat from %s: %s", participant, text)
-
-
-def _handle_command(participant: str, text: str) -> None:
-    try:
-        payload = json.loads(text)
-        logger.info("[agent] command from %s: %s", participant, payload)
-    except json.JSONDecodeError:
-        logger.warning("[agent] invalid command JSON from %s", participant)
-
-
-_TOPIC_HANDLERS = {
-    "chat": _handle_chat,
-    "command": _handle_command,
-}
-
-
-async def _wait_first(*events: asyncio.Event) -> None:
-    tasks = [asyncio.create_task(e.wait()) for e in events]
-    _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
 
 
 async def _run_until_disconnected(coro, disconnected: asyncio.Event) -> None:
@@ -110,30 +88,11 @@ async def stream_liveportrait(source: rtc.VideoSource) -> None:
         thread.join(timeout=10)
 
 
-_BLANK_FRAME = bytes(WIDTH * HEIGHT * 4)
-
-
-async def _stream_hold(source: rtc.VideoSource) -> None:
+async def _stream_idle(source: rtc.VideoSource) -> None:
     next_t = perf_counter()
     while True:
-        source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _BLANK_FRAME))
-        next_t += 1.0 / FPS
-        await asyncio.sleep(max(0.0, next_t - perf_counter()))
-
-
-async def stream_rainbow(source: rtc.VideoSource) -> None:
-    argb_frame = bytearray(WIDTH * HEIGHT * 4)
-    arr = np.frombuffer(argb_frame, dtype=np.uint8)
-    hue = 0.0
-    next_t = perf_counter()
-    while True:
-        r, g, b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-        arr.flat[::4]  = int(r * 255)
-        arr.flat[1::4] = int(g * 255)
-        arr.flat[2::4] = int(b * 255)
-        arr.flat[3::4] = 255
-        source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(argb_frame)))
-        hue = (hue + (1 / FPS) / 3) % 1.0
+        frame = idle_frame if idle_frame is not None else _RED_FRAME
+        source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, frame))
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
@@ -143,7 +102,6 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
     room = rtc.Room()
     loop = asyncio.get_running_loop()
     disconnected = asyncio.Event()
-    chat_event = asyncio.Event()
 
     @room.on("disconnected")
     def on_disconnected():
@@ -159,9 +117,7 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
             text = data.data.decode("utf-8")
         except Exception:
             return
-        if data.topic == "chat":
-            loop.call_soon_threadsafe(chat_event.set)
-        handler = _TOPIC_HANDLERS.get(data.topic)
+        handler = TOPIC_HANDLERS.get(data.topic)
         if handler:
             handler(data.participant.identity, text)
         else:
@@ -184,36 +140,8 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
         pub = await room.local_participant.publish_track(track, options)
         logger.info("[agent] track published sid=%s room=%s", pub.sid, room_id)
 
-        source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(WIDTH * HEIGHT * 4)))
-
-        while not disconnected.is_set():
-            logger.info("[agent] waiting for chat room=%s", room_id)
-            hold_task = asyncio.create_task(_stream_hold(source))
-            await _wait_first(chat_event, disconnected)
-            hold_task.cancel()
-            try:
-                await hold_task
-            except asyncio.CancelledError:
-                pass
-
-            if disconnected.is_set():
-                break
-
-            chat_event.clear()
-            logger.info("[agent] chat received, starting liveportrait room=%s", room_id)
-
-            stream_task = asyncio.create_task(stream_liveportrait(source))
-            disconnect_task = asyncio.create_task(disconnected.wait())
-            _, pending = await asyncio.wait(
-                [stream_task, disconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in pending:
-                t.cancel()
-                try:
-                    await t
-                except asyncio.CancelledError:
-                    pass
+        logger.info("[agent] streaming blank frames room=%s", room_id)
+        await _run_until_disconnected(_stream_idle(source), disconnected)
 
     except asyncio.CancelledError:
         pass

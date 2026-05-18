@@ -1,16 +1,33 @@
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 import tempfile
 import threading
 import time
 
+import cv2
+
 from src.config.argument_config import ArgumentConfig
 from sdk.controllers.liveportrait import _get_pipeline
 from sdk.controllers.speech2video.motion import neutral_keyframes, build_template, add_blinks, add_talks
 
+logger = logging.getLogger(__name__)
+
 _pipeline_lock = threading.Lock()  # pipeline is not safe for concurrent execute_streaming calls
+
+_IDLE_FRAME_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "idle_frame.png")
+
+
+def capture_and_save_idle_frame() -> None:
+    """Run once to capture the first LivePortrait frame and save it to disk."""
+    gen = liveportrait_frame_gen()
+    frame_rgb = next(gen)
+    gen.close()
+    bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(_IDLE_FRAME_PATH, bgr)
+    logger.info("[video] idle frame saved to %s", _IDLE_FRAME_PATH)
 
 
 
@@ -97,7 +114,7 @@ def warmup_stream(pipeline) -> None:
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
-            flag_pasteback=True,
+            flag_pasteback=False,
         )
         frame_gen, _ = pipeline.execute_streaming(args)
         for _ in frame_gen:
@@ -125,7 +142,7 @@ def liveportrait_frame_gen(viseme_sequence=None):
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
-            flag_pasteback=True,
+            flag_pasteback=False,
         )
         with _pipeline_lock:
             frame_gen, _ = _get_pipeline().execute_streaming(args)

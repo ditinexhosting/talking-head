@@ -27,7 +27,14 @@ def _get_pipeline() -> LivePortraitPipeline:
     global _pipeline
     if _pipeline is None:
         _pipeline = LivePortraitPipeline(
-            inference_cfg=InferenceConfig(flag_do_torch_compile=True),
+            inference_cfg=InferenceConfig(
+                flag_do_torch_compile=True,
+                flag_use_half_precision=True,
+                flag_stitching=False,
+                flag_eye_retargeting=False,
+                flag_lip_retargeting=False,
+                flag_normalize_lip=False,
+            ),
             crop_cfg=CropConfig(),
         )
         _warmup(_pipeline)

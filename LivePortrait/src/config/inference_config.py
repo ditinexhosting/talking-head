@@ -38,11 +38,11 @@ class InferenceConfig(PrintableConfig):
     flag_use_half_precision: bool = True
     flag_crop_driving_video: bool = False
     device_id: int = 0
-    flag_normalize_lip: bool = True
+    flag_normalize_lip: bool = False
     flag_source_video_eye_retargeting: bool = False
     flag_eye_retargeting: bool = False
     flag_lip_retargeting: bool = False
-    flag_stitching: bool = True
+    flag_stitching: bool = False
     flag_relative_motion: bool = True
     flag_pasteback: bool = True
     flag_do_crop: bool = True
