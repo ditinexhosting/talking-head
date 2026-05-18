@@ -4,12 +4,10 @@ import asyncio
 import colorsys
 import logging
 import os
-import threading
 from datetime import timedelta
 from time import perf_counter
 
 import numpy as np
-import httpx
 from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 
@@ -19,7 +17,7 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://livekit.ditinex.com")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "devsecret123changeme")
 
-WIDTH, HEIGHT = 640, 480
+WIDTH, HEIGHT = 512, 512
 FPS = 25
 
 
@@ -56,70 +54,19 @@ async def stream_rainbow(source: rtc.VideoSource) -> None:
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
 
-async def stream_liveportrait(source: rtc.VideoSource) -> None:
-    from sdk.controllers.speech2video.video import liveportrait_frame_gen
-
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-
-    def _produce():
-        try:
-            for frame in liveportrait_frame_gen():
-                loop.call_soon_threadsafe(queue.put_nowait, frame)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    thread = threading.Thread(target=_produce, daemon=True)
-    thread.start()
-
-    try:
-        next_t = perf_counter()
-        while True:
-            frame_rgb = await queue.get()
-            if frame_rgb is None:
-                break
-            h, w = frame_rgb.shape[:2]
-            rgba = np.empty((h, w, 4), dtype=np.uint8)
-            rgba[:, :, :3] = frame_rgb
-            rgba[:, :, 3] = 255
-            source.capture_frame(rtc.VideoFrame(w, h, rtc.VideoBufferType.RGBA, rgba.tobytes()))
-            next_t += 1.0 / FPS
-            await asyncio.sleep(max(0.0, next_t - perf_counter()))
-    finally:
-        thread.join(timeout=10)
-
-
-async def notify_vps(callback_url: str) -> None:
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(callback_url)
-        logger.info("[agent] notified VPS: %s", callback_url)
-    except Exception as exc:
-        logger.warning("[agent] VPS callback failed: %s", exc)
-
-
 async def run_agent(room_id: str, callback_url: str | None = None) -> None:
     logger.info("[agent] starting room=%s", room_id)
     room = rtc.Room()
     loop = asyncio.get_running_loop()
-    chat_queue: asyncio.Queue[str] = asyncio.Queue()
     disconnected = asyncio.Event()
-
-    @room.on("data_received")
-    def on_data_received(data: rtc.DataPacket):
-        logger.info("[agent] data_received topic=%r", data.topic)
-        if data.topic == "chat":
-            try:
-                text = data.data.decode("utf-8")
-                loop.call_soon_threadsafe(chat_queue.put_nowait, text)
-            except Exception as exc:
-                logger.error("[agent] chat decode error: %s", exc)
 
     @room.on("disconnected")
     def on_disconnected():
         loop.call_soon_threadsafe(disconnected.set)
-        if callback_url:
-            asyncio.create_task(notify_vps(callback_url))
+
+    @room.on("data_received")
+    def on_data_received(data: rtc.DataPacket):
+        logging.info("received data from %s: %s", data.participant.identity, data.data)
 
     try:
         token = generate_livekit_token(f"agent-{room_id}", room_id)
@@ -138,47 +85,13 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
         pub = await room.local_participant.publish_track(track, options)
         logger.info("[agent] track published sid=%s room=%s", pub.sid, room_id)
 
-        stop_task = asyncio.create_task(disconnected.wait())
-        stream_task = asyncio.create_task(stream_liveportrait(source))
-
-        while not disconnected.is_set():
-            chat_task = asyncio.create_task(chat_queue.get())
-            done, _ = await asyncio.wait(
-                {stream_task, chat_task, stop_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if stop_task in done:
-                stream_task.cancel()
-                chat_task.cancel()
-                break
-
-            if chat_task in done:
-                logger.info("[agent] chat received — switching to liveportrait")
-                stream_task.cancel()
-                try:
-                    await stream_task
-                except asyncio.CancelledError:
-                    pass
-                lp_task = asyncio.create_task(stream_liveportrait(source))
-                done2, _ = await asyncio.wait({lp_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
-                if stop_task in done2:
-                    lp_task.cancel()
-                    try:
-                        await lp_task
-                    except asyncio.CancelledError:
-                        pass
-                    break
-                while not chat_queue.empty():
-                    chat_queue.get_nowait()
-                stream_task = asyncio.create_task(stream_rainbow(source))
-            else:
-                chat_task.cancel()
-                try:
-                    await chat_task
-                except asyncio.CancelledError:
-                    pass
-                stream_task = asyncio.create_task(stream_rainbow(source))
+        stream_task = asyncio.create_task(stream_rainbow(source))
+        await disconnected.wait()
+        stream_task.cancel()
+        try:
+            await stream_task
+        except asyncio.CancelledError:
+            pass
 
     except asyncio.CancelledError:
         pass

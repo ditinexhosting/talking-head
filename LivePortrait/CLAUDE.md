@@ -41,7 +41,8 @@ Installed versions:
 
 - `numpy` is pinned to `2.4.4`; `albumentations` must be `>=1.4.11` to be compatible.
 - Do **not** use the `sdk/venv/` environment for the main server — they are separate.
-- PyTorch wheels are pulled from `https://download.pytorch.org/whl/cu124`.
+- PyTorch wheels are pulled from `https://download.pytorch.org/whl/cu128`.
+- `onnxruntime-gpu` is pinned to `1.20.1` — versions 1.21+ on PyPI ship a broken namespace package (empty module, `CUDAExecutionProvider` not available). Do not upgrade until a fixed wheel is confirmed.
 
 ## Architecture
 

@@ -40,8 +40,8 @@ def generate_ui_token(room_id: str, user_id: str) -> str:
         room_join=True,
         room=room_id,
         can_subscribe=True,
-        can_publish=False,
-        can_publish_data=False,
+        can_publish=True,
+        can_publish_data=True,
     )
     token = (
         AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
