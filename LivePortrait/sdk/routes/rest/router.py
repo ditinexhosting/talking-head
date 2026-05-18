@@ -42,7 +42,7 @@ def animate():
 
     frame_gen = liveportrait_frame_gen()
     first_frame = next(frame_gen)
-    width, height = 512, 512
+    height, width = first_frame.shape[:2]
 
     proc = subprocess.Popen(
         [

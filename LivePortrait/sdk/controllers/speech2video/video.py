@@ -97,7 +97,7 @@ def warmup_stream(pipeline) -> None:
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
-            flag_pasteback=False,
+            flag_pasteback=True,
         )
         frame_gen, _ = pipeline.execute_streaming(args)
         for _ in frame_gen:
@@ -125,11 +125,10 @@ def liveportrait_frame_gen(viseme_sequence=None):
             source=_DEFAULT_SOURCE,
             driving=tpl_file.name,
             output_dir=tempfile.mkdtemp(),
-            flag_pasteback=False,
+            flag_pasteback=True,
         )
         with _pipeline_lock:
             frame_gen, _ = _get_pipeline().execute_streaming(args)
             yield from frame_gen
     finally:
         os.unlink(tpl_file.name)
-
