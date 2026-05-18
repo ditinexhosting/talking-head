@@ -13,6 +13,7 @@ from livekit.api import AccessToken, VideoGrants
 
 from sdk.controllers.livekit.util import idle_frame
 from sdk.controllers.speech2video.video import liveportrait_frame_gen
+from sdk.controllers.tts import text_to_speech_kokoro
 
 logger = logging.getLogger(__name__)
 
@@ -58,50 +59,97 @@ def _to_rtc_frame(frame_rgb: np.ndarray) -> rtc.VideoFrame:
     return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes()))
 
 
-async def _stream_loop(source: rtc.VideoSource, text_queue: asyncio.Queue[str]) -> None:
-    """Show idle frame; on each queued text trigger a LivePortrait animation, then return to idle."""
+_AUDIO_CHUNK_MS = 20  # push audio in 20ms chunks so capture_frame paces at real playback rate
+
+
+async def _push_audio(audio_source: rtc.AudioSource, pcm_bytes: bytes, sample_rate: int) -> None:
+    """Push PCM audio in 20ms chunks so this coroutine takes the actual audio duration to complete."""
+    bytes_per_chunk = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 = 2 bytes/sample
+    offset = 0
+    while offset < len(pcm_bytes):
+        chunk = pcm_bytes[offset:offset + bytes_per_chunk]
+        frame = rtc.AudioFrame(
+            data=chunk,
+            sample_rate=sample_rate,
+            num_channels=1,
+            samples_per_channel=len(chunk) // 2,
+        )
+        await audio_source.capture_frame(frame)
+        offset += bytes_per_chunk
+
+
+async def _play_sentence(
+    video_source: rtc.VideoSource,
+    audio_source: rtc.AudioSource,
+    pcm_bytes: bytes,
+    sample_rate: int,
+    idle: bytes,
+    next_t: float,
+    loop: asyncio.AbstractEventLoop,
+) -> float:
+    """Play one sentence: audio + video run concurrently; returns updated next_t.
+    Both must fully complete before this returns — sentence 2 cannot start until then."""
+    frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
+
+    def _produce(q: asyncio.Queue) -> None:
+        try:
+            for frame_rgb in liveportrait_frame_gen():
+                asyncio.run_coroutine_threadsafe(q.put(frame_rgb), loop).result()
+        finally:
+            asyncio.run_coroutine_threadsafe(q.put(None), loop).result()
+
+    threading.Thread(target=_produce, args=(frame_queue,), daemon=True).start()
+
+    # Audio runs as a timed task — takes the real playback duration to complete
+    audio_task = asyncio.create_task(_push_audio(audio_source, pcm_bytes, sample_rate))
+
+    # Drive video frames until the animation generator is exhausted
+    while True:
+        try:
+            frame_rgb = frame_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
+            next_t += 1.0 / FPS
+            await asyncio.sleep(max(0.0, next_t - perf_counter()))
+            continue
+        if frame_rgb is None:
+            break
+        video_source.capture_frame(_to_rtc_frame(frame_rgb))
+        next_t += 1.0 / FPS
+        await asyncio.sleep(max(0.0, next_t - perf_counter()))
+
+    # Wait for audio playback to finish — whichever finishes last, the other already done
+    await audio_task
+    return next_t
+
+
+async def _stream_loop(
+    video_source: rtc.VideoSource,
+    audio_source: rtc.AudioSource,
+    text_queue: asyncio.Queue[str],
+) -> None:
+    """Idle until text arrives, then play each sentence fully (audio + video) before starting the next."""
     loop = asyncio.get_running_loop()
     _idle = idle_frame if idle_frame is not None else _RED_FRAME
     next_t = perf_counter()
 
     while True:
-        # Check for a pending text without blocking
         try:
             text = text_queue.get_nowait()
         except asyncio.QueueEmpty:
-            source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
+            video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
             continue
 
-        logger.info("[agent] animating for text: %r", text)
+        logger.info("[agent] received text: %r", text)
 
-        frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
+        async for pcm_bytes, sample_rate, visemes in text_to_speech_kokoro(text):
+            logger.info("[agent] playing sentence — audio=%.2fs", len(pcm_bytes) / 2 / sample_rate)
+            next_t = await _play_sentence(video_source, audio_source, pcm_bytes, sample_rate, _idle, next_t, loop)
+            logger.info("[agent] sentence done, moving to next")
 
-        def _produce(q: asyncio.Queue) -> None:
-            try:
-                for frame_rgb in liveportrait_frame_gen():
-                    asyncio.run_coroutine_threadsafe(q.put(frame_rgb), loop).result()
-            finally:
-                asyncio.run_coroutine_threadsafe(q.put(None), loop).result()
-
-        threading.Thread(target=_produce, args=(frame_queue,), daemon=True).start()
-
-        while True:
-            try:
-                frame_rgb = frame_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
-                next_t += 1.0 / FPS
-                await asyncio.sleep(max(0.0, next_t - perf_counter()))
-                continue
-            if frame_rgb is None:
-                break
-            source.capture_frame(_to_rtc_frame(frame_rgb))
-            next_t += 1.0 / FPS
-            await asyncio.sleep(max(0.0, next_t - perf_counter()))
-
-        logger.info("[agent] animation done, returning to idle")
+        logger.info("[agent] all sentences done, returning to idle")
 
 
 async def run_agent(room_id: str, callback_url: str | None = None) -> None:
@@ -134,20 +182,27 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
         await room.connect(LIVEKIT_URL, token)
         logger.info("[agent] connected room=%s", room_id)
 
-        source = rtc.VideoSource(WIDTH, HEIGHT)
-        track = rtc.LocalVideoTrack.create_video_track("agent-video", source)
-        options = rtc.TrackPublishOptions(
-            source=rtc.TrackSource.SOURCE_CAMERA,
-            video_encoding=rtc.VideoEncoding(
-                max_framerate=FPS,
-                max_bitrate=2_000_000,
+        video_source = rtc.VideoSource(WIDTH, HEIGHT)
+        video_track = rtc.LocalVideoTrack.create_video_track("agent-video", video_source)
+        video_pub = await room.local_participant.publish_track(
+            video_track,
+            rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA,
+                video_encoding=rtc.VideoEncoding(max_framerate=FPS, max_bitrate=2_000_000),
             ),
         )
-        pub = await room.local_participant.publish_track(track, options)
-        logger.info("[agent] track published sid=%s room=%s", pub.sid, room_id)
+        logger.info("[agent] video track published sid=%s room=%s", video_pub.sid, room_id)
+
+        audio_source = rtc.AudioSource(sample_rate=24000, num_channels=1)
+        audio_track = rtc.LocalAudioTrack.create_audio_track("agent-audio", audio_source)
+        audio_pub = await room.local_participant.publish_track(
+            audio_track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+        logger.info("[agent] audio track published sid=%s room=%s", audio_pub.sid, room_id)
 
         logger.info("[agent] starting stream loop room=%s", room_id)
-        await _run_until_disconnected(_stream_loop(source, text_queue), disconnected)
+        await _run_until_disconnected(_stream_loop(video_source, audio_source, text_queue), disconnected)
 
     except asyncio.CancelledError:
         pass

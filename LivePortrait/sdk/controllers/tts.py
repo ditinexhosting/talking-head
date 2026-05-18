@@ -1,28 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import json
+import logging
 import os
 import re
 import tempfile
+import time
 import wave
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 
-
-if TYPE_CHECKING:
-    from sdk.controllers.ws import WebSocketConnection
+logger = logging.getLogger(__name__)
 
 _ASSETS = Path(__file__).parent.parent / "assets"
 _MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
 _VOICES_PATH = str(_ASSETS / "voices-v1.0.bin")
 _RHUBARB = str(_ASSETS / "rhubarb-1.14.0" / "rhubarb")
-_SAMPLE_DIR = _ASSETS / "sample"
-_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 _kokoro = None
@@ -31,8 +27,13 @@ _kokoro = None
 def _get_kokoro():
     global _kokoro
     if _kokoro is None:
+        import onnxruntime as rt
         from kokoro_onnx import Kokoro
-        _kokoro = Kokoro(_MODEL_PATH, _VOICES_PATH)
+        available = rt.get_available_providers()
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
+        logger.info("[tts] onnxruntime providers: %s", providers)
+        session = rt.InferenceSession(_MODEL_PATH, providers=providers)
+        _kokoro = Kokoro.from_session(session, _VOICES_PATH)
     return _kokoro
 
 
@@ -98,94 +99,46 @@ async def _run_rhubarb(wav_path: str, transcript: str) -> list[dict]:
     return _enrich_visemes(mouth_cues)
 
 
-_TAG_AUDIO = b"\x01"
-_TAG_VIDEO = b"\x02"
-
-
-async def _send_interleaved(conn: WebSocketConnection, audio_bytes: bytes, video_bytes: bytes | None, chunk: int = 64 * 1024):
-    a_len = len(audio_bytes)
-    v_len = len(video_bytes) if video_bytes else 0
-    a_off = v_off = 0
-    while a_off < a_len or v_off < v_len:
-        if a_off < a_len:
-            await conn.send_bytes(_TAG_AUDIO + audio_bytes[a_off:a_off + chunk])
-            a_off += chunk
-        if v_off < v_len:
-            await conn.send_bytes(_TAG_VIDEO + video_bytes[v_off:v_off + chunk])
-            v_off += chunk
-
-
-async def text_to_speech_kokoro_sample(conn: WebSocketConnection):
-    for name in sorted(p.name for p in _SAMPLE_DIR.glob("[0-9][0-9][0-9].json")):
-        payload = json.loads((_SAMPLE_DIR / name).read_text())
-        audio_bytes = base64.b64decode(payload["audio"]["data"])
-        video_bytes = base64.b64decode(payload["video"]["data"]) if payload.get("video") else None
-
-        await conn.send_json({
-            "session_id": conn.session_id,
-            "event": "chunk_start",
-            "audio": {"sample_rate": payload["audio"]["sample_rate"], "encoding": payload["audio"]["encoding"], "size": len(audio_bytes)},
-            "video": {"encoding": payload["video"]["encoding"], "size": len(video_bytes)} if video_bytes else None,
-        })
-
-        await _send_interleaved(conn, audio_bytes, video_bytes)
-
-        await conn.send_json({
-            "session_id": conn.session_id,
-            "event": "chunk_end"
-        })
-        await asyncio.sleep(1)
-
 
 async def text_to_speech_kokoro(
-    conn: WebSocketConnection,
     text: str,
     voice: str = "am_adam",
     speed: float = 1.0,
     lang: str = "en-us",
 ):
+    """Async generator — yields (pcm_bytes, sample_rate, visemes) per sentence."""
     kokoro = _get_kokoro()
+    total_start = time.perf_counter()
 
     for idx, sentence in enumerate(_split_into_sentences(text)):
+        t = time.perf_counter()
         samples, sample_rate = kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
+        kokoro_s = time.perf_counter() - t
+        logger.info("[tts] s%d kokoro.create=%.3fs", idx, kokoro_s)
 
+        t = time.perf_counter()
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(_samples_to_wav_bytes(samples, sample_rate))
+        wav_s = time.perf_counter() - t
+        logger.info("[tts] s%d wav_write=%.3fs", idx, wav_s)
+
         try:
-            with os.fdopen(tmp_fd, "wb") as f:
-                f.write(_samples_to_wav_bytes(samples, sample_rate))
+            t = time.perf_counter()
             visemes = await _run_rhubarb(tmp_path, sentence)
+            rhubarb_s = time.perf_counter() - t
+            logger.info("[tts] s%d rhubarb=%.3fs  visemes=%d", idx, rhubarb_s, len(visemes))
         finally:
             os.unlink(tmp_path)
 
+        t = time.perf_counter()
         pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
         audio_bytes = pcm.tobytes()
-        (_SAMPLE_DIR / "visemes_debug.json").write_text(json.dumps({"visemes": visemes}, indent=2))
-        #video_bytes = await speech_to_video(visemes) if visemes else None
-        video_bytes = None
+        pcm_s = time.perf_counter() - t
+        logger.info("[tts] s%d pcm_convert=%.3fs", idx, pcm_s)
 
-        sample_payload = {
-            "audio": {
-                "sample_rate": sample_rate,
-                "encoding": "pcm_s16le",
-                "data": base64.b64encode(audio_bytes).decode("ascii"),
-            },
-            "video": {
-                "encoding": "mp4",
-                "data": base64.b64encode(video_bytes).decode("ascii"),
-            } if video_bytes else None,
-        }
-        (_SAMPLE_DIR / f"{idx:03d}.json").write_text(json.dumps(sample_payload))
+        logger.info("[tts] s%d total=%.3fs | %r", idx, kokoro_s + wav_s + rhubarb_s + pcm_s, sentence)
 
-        await conn.send_json({
-            "session_id": conn.session_id,
-            "event": "chunk_start",
-            "audio": {"sample_rate": sample_rate, "encoding": "pcm_s16le", "size": len(audio_bytes)},
-            "video": {"encoding": "mp4", "size": len(video_bytes)} if video_bytes else None,
-        })
+        yield audio_bytes, sample_rate, visemes
 
-        await _send_interleaved(conn, audio_bytes, video_bytes)
-
-        await conn.send_json({
-            "session_id": conn.session_id,
-            "event": "chunk_end"
-        })
+    logger.info("[tts] grand_total=%.3fs for full text", time.perf_counter() - total_start)
