@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import colorsys
 import logging
 import os
 import threading
 from datetime import timedelta
 from time import perf_counter
 
-import cv2
 import numpy as np
 from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 
-from sdk.controllers.livekit.data_handlers import TOPIC_HANDLERS
 from sdk.controllers.livekit.util import idle_frame
+from sdk.controllers.speech2video.video import liveportrait_frame_gen
 
 logger = logging.getLogger(__name__)
 
@@ -53,48 +51,57 @@ async def _run_until_disconnected(coro, disconnected: asyncio.Event) -> None:
         pass
 
 
-async def stream_liveportrait(source: rtc.VideoSource) -> None:
-    from sdk.controllers.speech2video.video import liveportrait_frame_gen
+def _to_rtc_frame(frame_rgb: np.ndarray) -> rtc.VideoFrame:
+    rgba = np.empty((HEIGHT, WIDTH, 4), dtype=np.uint8)
+    rgba[:, :, :3] = frame_rgb
+    rgba[:, :, 3] = 255
+    return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes()))
 
+
+async def _stream_loop(source: rtc.VideoSource, text_queue: asyncio.Queue[str]) -> None:
+    """Show idle frame; on each queued text trigger a LivePortrait animation, then return to idle."""
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
+    _idle = idle_frame if idle_frame is not None else _RED_FRAME
+    next_t = perf_counter()
 
-    def _produce():
+    while True:
+        # Check for a pending text without blocking
         try:
-            for frame in liveportrait_frame_gen():
-                loop.call_soon_threadsafe(queue.put_nowait, frame)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    thread = threading.Thread(target=_produce, daemon=True)
-    thread.start()
-
-    try:
-        next_t = perf_counter()
-        while True:
-            frame_rgb = await queue.get()
-            if frame_rgb is None:
-                break
-            h, w = frame_rgb.shape[:2]
-            if h != HEIGHT or w != WIDTH:
-                frame_rgb = cv2.resize(frame_rgb, (WIDTH, HEIGHT))
-            rgba = np.empty((HEIGHT, WIDTH, 4), dtype=np.uint8)
-            rgba[:, :, :3] = frame_rgb
-            rgba[:, :, 3] = 255
-            source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes())))
+            text = text_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
-    finally:
-        thread.join(timeout=10)
+            continue
 
+        logger.info("[agent] animating for text: %r", text)
 
-async def _stream_idle(source: rtc.VideoSource) -> None:
-    next_t = perf_counter()
-    while True:
-        frame = idle_frame if idle_frame is not None else _RED_FRAME
-        source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, frame))
-        next_t += 1.0 / FPS
-        await asyncio.sleep(max(0.0, next_t - perf_counter()))
+        frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
+
+        def _produce(q: asyncio.Queue) -> None:
+            try:
+                for frame_rgb in liveportrait_frame_gen():
+                    asyncio.run_coroutine_threadsafe(q.put(frame_rgb), loop).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(q.put(None), loop).result()
+
+        threading.Thread(target=_produce, args=(frame_queue,), daemon=True).start()
+
+        while True:
+            try:
+                frame_rgb = frame_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
+                next_t += 1.0 / FPS
+                await asyncio.sleep(max(0.0, next_t - perf_counter()))
+                continue
+            if frame_rgb is None:
+                break
+            source.capture_frame(_to_rtc_frame(frame_rgb))
+            next_t += 1.0 / FPS
+            await asyncio.sleep(max(0.0, next_t - perf_counter()))
+
+        logger.info("[agent] animation done, returning to idle")
 
 
 async def run_agent(room_id: str, callback_url: str | None = None) -> None:
@@ -102,6 +109,7 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
     room = rtc.Room()
     loop = asyncio.get_running_loop()
     disconnected = asyncio.Event()
+    text_queue: asyncio.Queue[str] = asyncio.Queue()
 
     @room.on("disconnected")
     def on_disconnected():
@@ -117,11 +125,9 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
             text = data.data.decode("utf-8")
         except Exception:
             return
-        handler = TOPIC_HANDLERS.get(data.topic)
-        if handler:
-            handler(data.participant.identity, text)
-        else:
-            logger.debug("[agent] unknown topic=%r from %s", data.topic, data.participant.identity)
+        logger.debug("[agent] data topic=%r from %s: %r", data.topic, data.participant.identity, text)
+        if data.topic == "chat":
+            loop.call_soon_threadsafe(text_queue.put_nowait, text)
 
     try:
         token = generate_livekit_token(f"agent-{room_id}", room_id)
@@ -140,8 +146,8 @@ async def run_agent(room_id: str, callback_url: str | None = None) -> None:
         pub = await room.local_participant.publish_track(track, options)
         logger.info("[agent] track published sid=%s room=%s", pub.sid, room_id)
 
-        logger.info("[agent] streaming blank frames room=%s", room_id)
-        await _run_until_disconnected(_stream_idle(source), disconnected)
+        logger.info("[agent] starting stream loop room=%s", room_id)
+        await _run_until_disconnected(_stream_loop(source, text_queue), disconnected)
 
     except asyncio.CancelledError:
         pass

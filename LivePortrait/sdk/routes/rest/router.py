@@ -50,7 +50,7 @@ def animate():
     frame_gen = liveportrait_frame_gen()
     first_frame = next(frame_gen)
     height, width = first_frame.shape[:2]
-    print(f"[animate] frame shape={first_frame.shape} dtype={first_frame.dtype} ({width}x{height})")
+
 
     proc = subprocess.Popen(
         [

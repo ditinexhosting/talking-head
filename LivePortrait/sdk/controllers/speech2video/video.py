@@ -102,7 +102,10 @@ _VISEME_SEQUENCE = {
 
 
 def warmup_stream(pipeline) -> None:
-    keyframes = neutral_keyframes(seconds=2 / _FPS, fps=_FPS)
+    # 4 frames: warmup frames 1-2 do eager + graph capture; frames 3-4 absorb
+    # the per-module re-recording that happens when GPU memory addresses shift
+    # between sessions (cudagraph_trees check_invariants failure).
+    keyframes = neutral_keyframes(seconds=4 / _FPS, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
 
     tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)

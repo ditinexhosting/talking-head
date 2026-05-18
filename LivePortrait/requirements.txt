@@ -3,6 +3,10 @@
 # onnxruntime-gpu 1.20.1 is the latest version that ships working CUDA shared libs via PyPI.
 # 1.21+ wheels on PyPI have a broken onnxruntime namespace (empty module); use 1.20.1 until
 # a fixed wheel is published.
+# WARNING: kokoro-onnx (and other packages) pull in the CPU `onnxruntime` package as a
+# dependency, which overwrites the GPU package's shared libs and kills CUDAExecutionProvider.
+# If that happens, restore GPU support with:
+#   pip uninstall onnxruntime -y && pip install onnxruntime-gpu==1.20.1 --force-reinstall --no-deps
 onnxruntime-gpu==1.20.1
 transformers==4.38.0
 
