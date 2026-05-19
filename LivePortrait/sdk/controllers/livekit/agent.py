@@ -59,8 +59,9 @@ def _to_rtc_frame(frame_rgb: np.ndarray) -> rtc.VideoFrame:
     return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes()))
 
 
-_AUDIO_CHUNK_MS = 20  # 20ms chunks — each capture_frame blocks for chunk duration
+_AUDIO_CHUNK_MS = 20       # 20ms chunks — each capture_frame blocks for chunk duration
 _AUDIO_CHUNKS_PER_FRAME = 2  # 2 × 20ms = 40ms = 1 video frame at 25fps
+_PREFILL_FRAMES = 5          # buffer this many frames before starting audio+video
 
 
 async def _play_sentence(
@@ -73,12 +74,11 @@ async def _play_sentence(
     next_t: float,
     loop: asyncio.AbstractEventLoop,
 ) -> float:
-    """Per-frame A/V sync: audio advances only when a video frame is ready.
-    If LivePortrait is slow, audio pauses until the next frame arrives."""
+    """Buffer _PREFILL_FRAMES before starting playback, then play with per-frame A/V sync."""
     viseme_sequence = {"visemes": visemes}
-    logger.info("[agent] liveportrait_frame_gen viseme_sequence=%s", viseme_sequence)
 
-    frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
+    # Unlimited queue — let LP generate at full GPU speed without being throttled
+    frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=0)
 
     def _produce(q: asyncio.Queue) -> None:
         try:
@@ -93,7 +93,6 @@ async def _play_sentence(
     audio_offset = 0
 
     async def _push_audio_for_frame() -> None:
-        """Push 2 × 20ms audio chunks (= 1 video frame worth). Blocks ~40ms."""
         nonlocal audio_offset
         for _ in range(_AUDIO_CHUNKS_PER_FRAME):
             chunk = pcm_bytes[audio_offset : audio_offset + chunk_size]
@@ -107,34 +106,47 @@ async def _play_sentence(
             ))
             audio_offset += chunk_size
 
-    # Hold audio until the first video frame is ready
-    while True:
+    # Phase 1 — Prefill: push idle frames until _PREFILL_FRAMES are buffered
+    prefill: list[np.ndarray] = []
+    generator_done = False
+    while len(prefill) < _PREFILL_FRAMES and not generator_done:
         try:
-            frame_rgb = frame_queue.get_nowait()
-            break
+            val = frame_queue.get_nowait()
+            if val is None:
+                generator_done = True
+            else:
+                prefill.append(val)
         except asyncio.QueueEmpty:
             video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
+    logger.info("[agent] prefill done frames=%d generator_done=%s", len(prefill), generator_done)
 
-    # Main loop: push video + matching audio together; pause audio when frame not ready
-    while frame_rgb is not None:
+    # Phase 2 — Play buffered frames (audio starts here)
+    for frame_rgb in prefill:
         video_source.capture_frame(_to_rtc_frame(frame_rgb))
-        await _push_audio_for_frame()  # blocks ~40ms — serves as frame pacer
+        await _push_audio_for_frame()
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
-        # Get next frame; if not ready, show idle and hold audio
+    # Phase 3 — Continue from queue until generator exhausted
+    if not generator_done:
         while True:
             try:
                 frame_rgb = frame_queue.get_nowait()
-                break
             except asyncio.QueueEmpty:
                 video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
                 next_t += 1.0 / FPS
                 await asyncio.sleep(max(0.0, next_t - perf_counter()))
+                continue
+            if frame_rgb is None:
+                break
+            video_source.capture_frame(_to_rtc_frame(frame_rgb))
+            await _push_audio_for_frame()
+            next_t += 1.0 / FPS
+            await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
-    # Drain remaining audio with idle frames
+    # Phase 4 — Drain remaining audio with idle frames
     while audio_offset < len(pcm_bytes):
         video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
         await _push_audio_for_frame()
@@ -161,12 +173,12 @@ async def _stream_loop(
         try:
             item = play_queue.get_nowait()
             if item is not None:
-                pcm_bytes, sample_rate, visemes = item
+                pcm_bytes, sample_rate, visemes, sentence = item
                 logger.info(
-                    "[agent] playing sentence — audio=%.2fs visemes=%d first=%s",
+                    "[agent] playing sentence — audio=%.2fs visemes=%d sentence=%r",
                     len(pcm_bytes) / 2 / sample_rate,
                     len(visemes),
-                    visemes[:2] if visemes else [],
+                    sentence,
                 )
                 next_t = await _play_sentence(video_source, audio_source, pcm_bytes, sample_rate, visemes, _idle, next_t, loop)
                 logger.info("[agent] sentence done")

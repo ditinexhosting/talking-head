@@ -142,6 +142,6 @@ async def text_to_speech_kokoro(
 
         logger.info("[tts] s%d total=%.3fs | %r", idx, kokoro_s + wav_s + rhubarb_s + pcm_s, sentence)
 
-        yield audio_bytes, sample_rate, visemes
+        yield audio_bytes, sample_rate, visemes, sentence
 
     logger.info("[tts] grand_total=%.3fs for full text", time.perf_counter() - total_start)
