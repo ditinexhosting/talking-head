@@ -108,11 +108,14 @@ async def text_to_speech_kokoro(
 ):
     """Async generator — yields (pcm_bytes, sample_rate, visemes) per sentence."""
     kokoro = _get_kokoro()
+    loop = asyncio.get_event_loop()
     total_start = time.perf_counter()
 
     for idx, sentence in enumerate(_split_into_sentences(text)):
         t = time.perf_counter()
-        samples, sample_rate = kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
+        samples, sample_rate = await loop.run_in_executor(
+            None, lambda s=sentence: kokoro.create(s, voice=voice, speed=speed, lang=lang)
+        )
         kokoro_s = time.perf_counter() - t
         logger.info("[tts] s%d kokoro.create=%.3fs", idx, kokoro_s)
 

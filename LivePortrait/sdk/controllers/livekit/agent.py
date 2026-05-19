@@ -59,23 +59,8 @@ def _to_rtc_frame(frame_rgb: np.ndarray) -> rtc.VideoFrame:
     return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes()))
 
 
-_AUDIO_CHUNK_MS = 20  # push audio in 20ms chunks so capture_frame paces at real playback rate
-
-
-async def _push_audio(audio_source: rtc.AudioSource, pcm_bytes: bytes, sample_rate: int) -> None:
-    """Push PCM audio in 20ms chunks so this coroutine takes the actual audio duration to complete."""
-    bytes_per_chunk = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 = 2 bytes/sample
-    offset = 0
-    while offset < len(pcm_bytes):
-        chunk = pcm_bytes[offset:offset + bytes_per_chunk]
-        frame = rtc.AudioFrame(
-            data=chunk,
-            sample_rate=sample_rate,
-            num_channels=1,
-            samples_per_channel=len(chunk) // 2,
-        )
-        await audio_source.capture_frame(frame)
-        offset += bytes_per_chunk
+_AUDIO_CHUNK_MS = 20  # 20ms chunks — each capture_frame blocks for chunk duration
+_AUDIO_CHUNKS_PER_FRAME = 2  # 2 × 20ms = 40ms = 1 video frame at 25fps
 
 
 async def _play_sentence(
@@ -83,43 +68,79 @@ async def _play_sentence(
     audio_source: rtc.AudioSource,
     pcm_bytes: bytes,
     sample_rate: int,
+    visemes: list,
     idle: bytes,
     next_t: float,
     loop: asyncio.AbstractEventLoop,
 ) -> float:
-    """Play one sentence: audio + video run concurrently; returns updated next_t.
-    Both must fully complete before this returns — sentence 2 cannot start until then."""
+    """Per-frame A/V sync: audio advances only when a video frame is ready.
+    If LivePortrait is slow, audio pauses until the next frame arrives."""
+    viseme_sequence = {"visemes": visemes}
+    logger.info("[agent] liveportrait_frame_gen viseme_sequence=%s", viseme_sequence)
+
     frame_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue(maxsize=4)
 
     def _produce(q: asyncio.Queue) -> None:
         try:
-            for frame_rgb in liveportrait_frame_gen():
+            for frame_rgb in liveportrait_frame_gen(viseme_sequence):
                 asyncio.run_coroutine_threadsafe(q.put(frame_rgb), loop).result()
         finally:
             asyncio.run_coroutine_threadsafe(q.put(None), loop).result()
 
     threading.Thread(target=_produce, args=(frame_queue,), daemon=True).start()
 
-    # Audio runs as a timed task — takes the real playback duration to complete
-    audio_task = asyncio.create_task(_push_audio(audio_source, pcm_bytes, sample_rate))
+    chunk_size = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 bytes per 20ms
+    audio_offset = 0
 
-    # Drive video frames until the animation generator is exhausted
+    async def _push_audio_for_frame() -> None:
+        """Push 2 × 20ms audio chunks (= 1 video frame worth). Blocks ~40ms."""
+        nonlocal audio_offset
+        for _ in range(_AUDIO_CHUNKS_PER_FRAME):
+            chunk = pcm_bytes[audio_offset : audio_offset + chunk_size]
+            if not chunk:
+                return
+            await audio_source.capture_frame(rtc.AudioFrame(
+                data=chunk,
+                sample_rate=sample_rate,
+                num_channels=1,
+                samples_per_channel=len(chunk) // 2,
+            ))
+            audio_offset += chunk_size
+
+    # Hold audio until the first video frame is ready
     while True:
         try:
             frame_rgb = frame_queue.get_nowait()
+            break
         except asyncio.QueueEmpty:
             video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
-            continue
-        if frame_rgb is None:
-            break
+
+    # Main loop: push video + matching audio together; pause audio when frame not ready
+    while frame_rgb is not None:
         video_source.capture_frame(_to_rtc_frame(frame_rgb))
+        await _push_audio_for_frame()  # blocks ~40ms — serves as frame pacer
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
-    # Wait for audio playback to finish — whichever finishes last, the other already done
-    await audio_task
+        # Get next frame; if not ready, show idle and hold audio
+        while True:
+            try:
+                frame_rgb = frame_queue.get_nowait()
+                break
+            except asyncio.QueueEmpty:
+                video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
+                next_t += 1.0 / FPS
+                await asyncio.sleep(max(0.0, next_t - perf_counter()))
+
+    # Drain remaining audio with idle frames
+    while audio_offset < len(pcm_bytes):
+        video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
+        await _push_audio_for_frame()
+        next_t += 1.0 / FPS
+        await asyncio.sleep(max(0.0, next_t - perf_counter()))
+
     return next_t
 
 
@@ -128,28 +149,52 @@ async def _stream_loop(
     audio_source: rtc.AudioSource,
     text_queue: asyncio.Queue[str],
 ) -> None:
-    """Idle until text arrives, then play each sentence fully (audio + video) before starting the next."""
+    """Continuously push idle frames; background TTS task pre-fills play_queue so
+    there are no gaps between sentences or during TTS computation."""
     loop = asyncio.get_running_loop()
     _idle = idle_frame if idle_frame is not None else _RED_FRAME
     next_t = perf_counter()
+    play_queue: asyncio.Queue[tuple[bytes, int, list] | None] = asyncio.Queue()
 
     while True:
+        # Play next sentence if TTS already has one ready
+        try:
+            item = play_queue.get_nowait()
+            if item is not None:
+                pcm_bytes, sample_rate, visemes = item
+                logger.info(
+                    "[agent] playing sentence — audio=%.2fs visemes=%d first=%s",
+                    len(pcm_bytes) / 2 / sample_rate,
+                    len(visemes),
+                    visemes[:2] if visemes else [],
+                )
+                next_t = await _play_sentence(video_source, audio_source, pcm_bytes, sample_rate, visemes, _idle, next_t, loop)
+                logger.info("[agent] sentence done")
+            # item is None → TTS batch sentinel, just consume and loop
+            continue
+        except asyncio.QueueEmpty:
+            pass
+
+        # Kick off background TTS for any new text
         try:
             text = text_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
-            next_t += 1.0 / FPS
-            await asyncio.sleep(max(0.0, next_t - perf_counter()))
+            logger.info("[agent] received text: %r", text)
+
+            async def _run_tts(t: str = text) -> None:
+                async for res in text_to_speech_kokoro(t):
+                    await play_queue.put(res)
+                await play_queue.put(None)
+                logger.info("[agent] tts batch done")
+
+            asyncio.create_task(_run_tts())
             continue
+        except asyncio.QueueEmpty:
+            pass
 
-        logger.info("[agent] received text: %r", text)
-
-        async for pcm_bytes, sample_rate, visemes in text_to_speech_kokoro(text):
-            logger.info("[agent] playing sentence — audio=%.2fs", len(pcm_bytes) / 2 / sample_rate)
-            next_t = await _play_sentence(video_source, audio_source, pcm_bytes, sample_rate, _idle, next_t, loop)
-            logger.info("[agent] sentence done, moving to next")
-
-        logger.info("[agent] all sentences done, returning to idle")
+        # Nothing ready — push idle frame to keep the track alive
+        video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))
+        next_t += 1.0 / FPS
+        await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
 
 async def run_agent(room_id: str, callback_url: str | None = None) -> None:

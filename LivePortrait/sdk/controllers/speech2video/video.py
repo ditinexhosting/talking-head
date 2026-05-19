@@ -130,7 +130,7 @@ def warmup_stream(pipeline) -> None:
 def liveportrait_frame_gen(viseme_sequence=None):
     """Yields raw RGB numpy frames from the LivePortrait pipeline."""
     vseq = viseme_sequence or _VISEME_SEQUENCE
-    _total_frames = round(vseq["visemes"][-1]["end"] * _FPS) + 15
+    _total_frames = round(vseq["visemes"][-1]["end"] * _FPS) + 5
     _total_seconds = _total_frames / _FPS
     keyframes = neutral_keyframes(seconds=_total_seconds, fps=_FPS)
     keyframes = add_blinks(keyframes, fps=_FPS)
