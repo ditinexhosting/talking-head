@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import threading
+import time as _time
 from datetime import timedelta
 from time import perf_counter
 
@@ -25,6 +26,16 @@ WIDTH, HEIGHT = 512, 512
 FPS = 25
 
 _RED_FRAME = bytes(np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), WIDTH * HEIGHT).tobytes())
+
+# How long to delay audio relative to the first generated video frame.
+# WebRTC video has ~150-300 ms more pipeline latency than audio (H.264 encoding +
+# jitter buffer), so audio must start later to stay in sync at the receiver.
+# Tune this value if audio arrives noticeably before or after lip movement.
+AUDIO_VIDEO_OFFSET_SECONDS = float(os.getenv("AUDIO_VIDEO_OFFSET_SECONDS", "0.3"))
+
+_AUDIO_CHUNK_MS = 20   # ms per audio chunk — matches LiveKit's expected cadence
+_PREFILL_FRAMES = 10   # video frames to buffer before starting playback
+
 
 def generate_livekit_token(identity: str, room_id: str) -> str:
     return (
@@ -56,17 +67,60 @@ def _to_rtc_frame(frame_rgb: np.ndarray) -> rtc.VideoFrame:
     rgba = np.empty((HEIGHT, WIDTH, 4), dtype=np.uint8)
     rgba[:, :, :3] = frame_rgb
     rgba[:, :, 3] = 255
-    return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, bytes(rgba.tobytes()))
+    return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, rgba.tobytes())
 
 
-_AUDIO_CHUNK_MS = 20       # 20ms chunks — each capture_frame blocks for chunk duration
-_AUDIO_CHUNKS_PER_FRAME = 2  # 2 × 20ms = 40ms = 1 video frame at 25fps
-_PREFILL_FRAMES = 5          # buffer this many frames before starting audio+video
+def _start_audio_thread(
+    audio_source: rtc.AudioSource,
+    pcm_bytes: bytes,
+    sample_rate: int,
+    main_loop: asyncio.AbstractEventLoop,
+    start_delay: float = 0.0,
+) -> threading.Thread:
+    """Stream audio on a dedicated OS thread, completely decoupled from the asyncio event loop.
+
+    Why a thread instead of asyncio.create_task:
+    - asyncio is single-threaded: even a 'concurrent' Task still occupies the event loop
+      thread while capture_frame awaits its 20 ms window, stealing time from the video loop.
+    - This thread blocks on fut.result() at the OS level.  During that OS-level wait,
+      the event loop is 100 % free to push video frames at precise 25 fps intervals.
+    - start_delay uses time.sleep (OS-level) so the event loop is never involved.
+    """
+    chunk_size = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 bytes per chunk
+
+    def _run() -> None:
+        if start_delay > 0:
+            _time.sleep(start_delay)
+        offset = 0
+        while offset < len(pcm_bytes):
+            chunk = pcm_bytes[offset : offset + chunk_size]
+            if not chunk:
+                break
+            frame = rtc.AudioFrame(
+                data=chunk,
+                sample_rate=sample_rate,
+                num_channels=1,
+                samples_per_channel=len(chunk) // 2,
+            )
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    audio_source.capture_frame(frame), main_loop
+                )
+                fut.result()  # OS-level block; event loop stays free
+            except Exception as exc:
+                logger.warning("[audio-thread] stopping early: %s", exc)
+                break
+            offset += chunk_size
+        logger.debug("[audio-thread] done")
+
+    t = threading.Thread(target=_run, daemon=True, name="audio-stream")
+    t.start()
+    return t
 
 
 async def _play_sentence(
     video_source: rtc.VideoSource,
-    audio_source: rtc.AudioSource,
+    audio_source: rtc.AudioSource | None,
     pcm_bytes: bytes,
     sample_rate: int,
     visemes: list,
@@ -74,7 +128,7 @@ async def _play_sentence(
     next_t: float,
     loop: asyncio.AbstractEventLoop,
 ) -> float:
-    """Buffer _PREFILL_FRAMES before starting playback, then play with per-frame A/V sync."""
+    """Video drives the clock at a steady 25 fps; audio streams on its own OS thread."""
     viseme_sequence = {"visemes": visemes}
 
     # Unlimited queue — let LP generate at full GPU speed without being throttled
@@ -89,24 +143,7 @@ async def _play_sentence(
 
     threading.Thread(target=_produce, args=(frame_queue,), daemon=True).start()
 
-    chunk_size = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 bytes per 20ms
-    audio_offset = 0
-
-    async def _push_audio_for_frame() -> None:
-        nonlocal audio_offset
-        for _ in range(_AUDIO_CHUNKS_PER_FRAME):
-            chunk = pcm_bytes[audio_offset : audio_offset + chunk_size]
-            if not chunk:
-                return
-            await audio_source.capture_frame(rtc.AudioFrame(
-                data=chunk,
-                sample_rate=sample_rate,
-                num_channels=1,
-                samples_per_channel=len(chunk) // 2,
-            ))
-            audio_offset += chunk_size
-
-    # Phase 1 — Prefill: push idle frames until _PREFILL_FRAMES are buffered
+    # Phase 1 — Prefill: accumulate frames while showing idle video
     prefill: list[np.ndarray] = []
     generator_done = False
     while len(prefill) < _PREFILL_FRAMES and not generator_done:
@@ -120,16 +157,30 @@ async def _play_sentence(
             video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
-    logger.info("[agent] prefill done frames=%d generator_done=%s", len(prefill), generator_done)
 
-    # Phase 2 — Play buffered frames (audio starts here)
+    logger.info(
+        "[agent] prefill done frames=%d generator_done=%s audio_delay=%.2fs",
+        len(prefill),
+        generator_done,
+        AUDIO_VIDEO_OFFSET_SECONDS,
+    )
+
+    # Launch audio on a dedicated OS thread with the configured delay.
+    # The delay compensates for the extra pipeline latency video has vs audio in WebRTC.
+    audio_thread: threading.Thread | None = None
+    if audio_source is not None and pcm_bytes:
+        audio_thread = _start_audio_thread(
+            audio_source, pcm_bytes, sample_rate, loop,
+            start_delay=AUDIO_VIDEO_OFFSET_SECONDS,
+        )
+
+    # Phase 2 — Play buffered frames; video clock is authoritative
     for frame_rgb in prefill:
         video_source.capture_frame(_to_rtc_frame(frame_rgb))
-        await _push_audio_for_frame()
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
-    # Phase 3 — Continue from queue until generator exhausted
+    # Phase 3 — Stream remaining frames from the generator
     if not generator_done:
         while True:
             try:
@@ -142,23 +193,22 @@ async def _play_sentence(
             if frame_rgb is None:
                 break
             video_source.capture_frame(_to_rtc_frame(frame_rgb))
-            await _push_audio_for_frame()
             next_t += 1.0 / FPS
             await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
-    # Phase 4 — Drain remaining audio with idle frames
-    while audio_offset < len(pcm_bytes):
-        video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
-        await _push_audio_for_frame()
-        next_t += 1.0 / FPS
-        await asyncio.sleep(max(0.0, next_t - perf_counter()))
+    # Phase 4 — Keep video alive with idle frames while audio thread drains
+    if audio_thread is not None:
+        while audio_thread.is_alive():
+            video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, idle))
+            next_t += 1.0 / FPS
+            await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
     return next_t
 
 
 async def _stream_loop(
     video_source: rtc.VideoSource,
-    audio_source: rtc.AudioSource,
+    audio_source: rtc.AudioSource | None,
     text_queue: asyncio.Queue[str],
 ) -> None:
     """Continuously push idle frames; background TTS task pre-fills play_queue so
@@ -180,7 +230,10 @@ async def _stream_loop(
                     len(visemes),
                     sentence,
                 )
-                next_t = await _play_sentence(video_source, audio_source, pcm_bytes, sample_rate, visemes, _idle, next_t, loop)
+                next_t = await _play_sentence(
+                    video_source, audio_source, pcm_bytes, sample_rate,
+                    visemes, _idle, next_t, loop,
+                )
                 logger.info("[agent] sentence done")
             # item is None → TTS batch sentinel, just consume and loop
             continue
