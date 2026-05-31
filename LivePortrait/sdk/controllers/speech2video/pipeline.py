@@ -84,6 +84,60 @@ class LivePortraitPipeline(object):
         for flag in self._PROPAGATED_FLAGS:
             setattr(inf_cfg, flag, getattr(args, flag))
 
+    def build_source_cache(self, source_path: str) -> dict:
+        """Pre-process a static source image once.
+
+        Returns a dict of GPU tensors that can be passed back to
+        execute_streaming(source_cache=...) to skip the per-call
+        reload + crop + feature extraction.
+        """
+        inf_cfg = self.live_portrait_wrapper.inference_cfg
+        crop_cfg = self.cropper.crop_cfg
+
+        img_rgb = load_image_rgb(source_path)
+        img_rgb = resize_to_limit(img_rgb, inf_cfg.source_max_dim, inf_cfg.source_division)
+
+        if inf_cfg.flag_do_crop:
+            crop_info = self.cropper.crop_source_image(img_rgb, crop_cfg)
+            if crop_info is None:
+                raise Exception("No face detected in the source image!")
+            source_lmk = crop_info['lmk_crop']
+            img_crop_256x256 = crop_info['img_crop_256x256']
+        else:
+            crop_info = None
+            source_lmk = self.cropper.calc_lmk_from_cropped_image(img_rgb)
+            img_crop_256x256 = cv2.resize(img_rgb, (256, 256))
+
+        I_s = self.live_portrait_wrapper.prepare_source(img_crop_256x256)
+        x_s_info = self.live_portrait_wrapper.get_kp_info(I_s)
+        x_c_s = x_s_info['kp']
+        R_s = get_rotation_matrix(x_s_info['pitch'], x_s_info['yaw'], x_s_info['roll'])
+        f_s = self.live_portrait_wrapper.extract_feature_3d(I_s)
+        x_s = self.live_portrait_wrapper.transform_keypoint(x_s_info)
+
+        lip_delta_before_animation = None
+        if inf_cfg.flag_normalize_lip and inf_cfg.flag_relative_motion and source_lmk is not None:
+            combined = self.live_portrait_wrapper.calc_combined_lip_ratio([0.], source_lmk)
+            if combined[0][0] >= inf_cfg.lip_normalize_threshold:
+                lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s, combined)
+
+        mask_ori_float = None
+        if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching and crop_info is not None:
+            mask_ori_float = prepare_paste_back(inf_cfg.mask_crop, crop_info['M_c2o'], dsize=(img_rgb.shape[1], img_rgb.shape[0]))
+
+        return {
+            'source_rgb': img_rgb,
+            'source_lmk': source_lmk,
+            'x_s_info': x_s_info,
+            'x_c_s': x_c_s,
+            'R_s': R_s,
+            'f_s': f_s,
+            'x_s': x_s,
+            'lip_delta_before_animation': lip_delta_before_animation,
+            'mask_ori_float': mask_ori_float,
+            'crop_info': crop_info,
+        }
+
     def execute(self, args: ArgumentConfig):
         self._apply_flag_overrides(args)
         inf_cfg = self.live_portrait_wrapper.inference_cfg
@@ -536,12 +590,15 @@ class LivePortraitPipeline(object):
 
         return wfp, wfp_concat
 
-    def execute_streaming(self, args: ArgumentConfig):
+    def execute_streaming(self, args: ArgumentConfig, source_cache: dict | None = None):
         """
         Returns (frame_generator, fps).
         frame_generator yields one numpy RGB uint8 array per animated frame so the
         caller can pipe frames to FFmpeg (or similar) without waiting for the full
         video to be assembled on disk.
+
+        Pass source_cache=build_source_cache(path) to skip per-call source
+        reload + crop + feature extraction for a static source image.
         """
         self._apply_flag_overrides(args)
         inf_cfg = self.live_portrait_wrapper.inference_cfg
@@ -553,7 +610,10 @@ class LivePortraitPipeline(object):
         ######## load source input ########
         flag_is_source_video = False
         source_fps = None
-        if is_image(args.source):
+        if source_cache is not None:
+            source_rgb_lst = [source_cache['source_rgb']]
+            log('[TIMER] Source loaded from cache')
+        elif is_image(args.source):
             img_rgb = load_image_rgb(args.source)
             img_rgb = resize_to_limit(img_rgb, inf_cfg.source_max_dim, inf_cfg.source_division)
             log(f"Load source image from {args.source}")
@@ -632,7 +692,18 @@ class LivePortraitPipeline(object):
         lip_delta_before_animation, eye_delta_before_animation = None, None
         mask_ori_float = None  # set below for image source; set per-frame for video source
 
-        if flag_is_source_video:
+        if source_cache is not None and not flag_is_source_video:
+            source_lmk = source_cache['source_lmk']
+            x_s_info = source_cache['x_s_info']
+            x_c_s = source_cache['x_c_s']
+            R_s = source_cache['R_s']
+            f_s = source_cache['f_s']
+            x_s = source_cache['x_s']
+            lip_delta_before_animation = source_cache['lip_delta_before_animation']
+            mask_ori_float = source_cache['mask_ori_float']
+            crop_info = source_cache.get('crop_info')
+            log(f'[TIMER] Source features loaded from cache in {time.time()-_t2:.3f}s'); _t3 = time.time()
+        elif flag_is_source_video:
             source_rgb_lst = source_rgb_lst[:n_frames]
             if inf_cfg.flag_do_crop:
                 ret_s = self.cropper.crop_source_video(source_rgb_lst, crop_cfg)

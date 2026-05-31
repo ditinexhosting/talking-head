@@ -24,9 +24,45 @@ _RHUBARB = str(_ASSETS / "rhubarb-1.14.0" / "rhubarb")
 _kokoro = None
 
 
+def _preload_cudnn():
+    """Preload cuDNN .so files so onnxruntime's CUDA provider can find them.
+
+    The nvidia-cudnn-cu12 wheel installs into site-packages/nvidia/cudnn/lib/,
+    which is not on LD_LIBRARY_PATH. ctypes.CDLL with RTLD_GLOBAL makes each
+    library visible to subsequent dlopen() calls (including libonnxruntime_providers_cuda.so).
+    """
+    import ctypes
+    import site
+    from pathlib import Path as _Path
+
+    for sp in site.getsitepackages():
+        cudnn_lib = _Path(sp) / "nvidia" / "cudnn" / "lib"
+        if not cudnn_lib.exists():
+            continue
+        load_order = [
+            "libcudnn.so.9",
+            "libcudnn_ops.so.9",
+            "libcudnn_adv.so.9",
+            "libcudnn_cnn.so.9",
+            "libcudnn_graph.so.9",
+            "libcudnn_heuristic.so.9",
+            "libcudnn_engines_precompiled.so.9",
+            "libcudnn_engines_runtime_compiled.so.9",
+        ]
+        for name in load_order:
+            p = cudnn_lib / name
+            if p.exists():
+                try:
+                    ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+                except OSError as e:
+                    logger.warning("[tts] failed to preload %s: %s", name, e)
+        break
+
+
 def _get_kokoro():
     global _kokoro
     if _kokoro is None:
+        _preload_cudnn()
         import onnxruntime as rt
         from kokoro_onnx import Kokoro
         available = rt.get_available_providers()

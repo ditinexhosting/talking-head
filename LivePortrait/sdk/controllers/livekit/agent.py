@@ -73,17 +73,19 @@ async def _play_sentence(
     visemes: list,
     next_t: float,
     loop: asyncio.AbstractEventLoop,
+    idle_bytes: bytes | None = None,
 ) -> float:
     """Video-driven playback with upfront frame buffering.
 
-    Phase 1 — Buffer : Show red frames until frame_queue has ≥ _MIN_VIDEO_BUFFER
+    Phase 1 — Buffer : Show idle frames until frame_queue has ≥ _MIN_VIDEO_BUFFER
               frames (or frame generation finishes, whichever comes first).
     Phase 2 — Play   : Start audio thread and pump video frames at 25 fps in sync.
     Phase 3 — Drain  : After all frames are displayed, wait for audio to finish.
 
     Returns the updated next_t so the video clock stays continuous.
     """
-    red = rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _RED_FRAME)
+    _idle = idle_bytes if idle_bytes is not None else _RED_FRAME
+    idle = rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle)
     chunk_size = sample_rate * _AUDIO_CHUNK_MS // 1000 * 2  # int16 bytes per 20 ms chunk
 
     # Wrap the viseme list in the dict format expected by liveportrait_frame_gen.
@@ -94,16 +96,13 @@ async def _play_sentence(
     # Frame generation — runs in a background thread so the GPU work
     # doesn't block the event loop.  A sentinel None marks the end.
     # ------------------------------------------------------------------
-    frame_queue: asyncio.Queue = asyncio.Queue()
+    frame_queue: asyncio.Queue[rtc.VideoFrame | None] = asyncio.Queue()
     gen_done = threading.Event()
 
     def _generate_frames() -> None:
         try:
             for frame_rgb in liveportrait_frame_gen(viseme_sequence):
-                # Fire-and-forget: don't stall the GPU waiting for the event
-                # loop to accept each frame.  put_nowait is safe here because
-                # the queue is unbounded.
-                loop.call_soon_threadsafe(frame_queue.put_nowait, frame_rgb)
+                loop.call_soon_threadsafe(frame_queue.put_nowait, _to_rtc_frame(frame_rgb))
         except Exception as exc:
             logger.warning("[video] frame gen error: %s", exc)
         finally:
@@ -114,11 +113,11 @@ async def _play_sentence(
     threading.Thread(target=_generate_frames, daemon=True, name="frame-gen").start()
 
     # ------------------------------------------------------------------
-    # Phase 1 — Buffer: show red frames until we have enough video frames
+    # Phase 1 — Buffer: show idle frames until we have enough video frames
     # or the generator finishes (handles clips shorter than MIN_BUFFER).
     # ------------------------------------------------------------------
     while frame_queue.qsize() < _MIN_VIDEO_BUFFER and not gen_done.is_set():
-        video_source.capture_frame(red)
+        video_source.capture_frame(idle)
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
     logger.debug("[video] buffer ready: %d frames queued", frame_queue.qsize())
@@ -157,32 +156,20 @@ async def _play_sentence(
     else:
         audio_done.set()
 
-    # Video-driven pump: one frame every 1/FPS seconds.
-    # If the GPU is slow and the next frame isn't ready within 2 ticks,
-    # repeat the last frame so the stream never freezes on a single frame.
-    last_rtc_frame: rtc.VideoFrame | None = None
     while True:
-        try:
-            frame_rgb = await asyncio.wait_for(frame_queue.get(), timeout=2.0 / FPS)
-        except asyncio.TimeoutError:
-            if last_rtc_frame is not None:
-                video_source.capture_frame(last_rtc_frame)
-            next_t += 1.0 / FPS
-            await asyncio.sleep(max(0.0, next_t - perf_counter()))
-            continue
-        if frame_rgb is None:  # sentinel — all frames consumed
+        frame = await frame_queue.get()
+        if frame is None:  # sentinel — all frames consumed
             break
-        last_rtc_frame = _to_rtc_frame(frame_rgb)
-        video_source.capture_frame(last_rtc_frame)
+        video_source.capture_frame(frame)
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
     # ------------------------------------------------------------------
-    # Phase 3 — Drain: video finished; keep pumping red frames at 25 fps
+    # Phase 3 — Drain: video finished; keep pumping idle frames at 25 fps
     # while we wait for audio to finish so the video source stays active.
     # ------------------------------------------------------------------
     while not audio_done.is_set():
-        video_source.capture_frame(red)
+        video_source.capture_frame(idle)
         next_t += 1.0 / FPS
         await asyncio.sleep(max(0.0, next_t - perf_counter()))
 
@@ -196,7 +183,7 @@ async def _stream_loop(
 ) -> None:
     """Two independent loops running concurrently:
     - Text watcher: awaits new text, splits into sentences, fills sentence_queue.
-    - Video loop:   shows red frame when sentence_queue has items, idle frame otherwise.
+    - Video loop:   shows idle frame when sentence_queue has items, idle frame otherwise.
     """
     _idle = idle_frame if idle_frame is not None else _RED_FRAME
     next_t = perf_counter()
@@ -220,7 +207,8 @@ async def _stream_loop(
             pcm_bytes, sample_rate, visemes, sentence = sentence_queue.get_nowait()
             logger.info("[agent] processing sentence: %r", sentence)
             next_t = await _play_sentence(
-                video_source, audio_source, pcm_bytes, sample_rate, visemes, next_t, loop
+                video_source, audio_source, pcm_bytes, sample_rate, visemes, next_t, loop,
+                idle_bytes=_idle,
             )
         except asyncio.QueueEmpty:
             video_source.capture_frame(rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, _idle))

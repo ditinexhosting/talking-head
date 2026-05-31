@@ -19,6 +19,18 @@ _pipeline_lock = threading.Lock()  # pipeline is not safe for concurrent execute
 
 _IDLE_FRAME_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "idle_frame.png")
 
+_source_cache: dict | None = None
+
+
+def preload_source(pipeline=None) -> None:
+    global _source_cache
+    if pipeline is None:
+        from sdk.controllers.liveportrait import _get_pipeline
+        pipeline = _get_pipeline()
+    logger.info("[video] preloading source %s...", _DEFAULT_SOURCE)
+    _source_cache = pipeline.build_source_cache(_DEFAULT_SOURCE)
+    logger.info("[video] source cache ready")
+
 
 def capture_and_save_idle_frame() -> None:
     """Run once to capture the first LivePortrait frame and save it to disk."""
@@ -148,7 +160,7 @@ def liveportrait_frame_gen(viseme_sequence=None):
             flag_pasteback=False,
         )
         with _pipeline_lock:
-            frame_gen, _ = _get_pipeline().execute_streaming(args)
+            frame_gen, _ = _get_pipeline().execute_streaming(args, source_cache=_source_cache)
             yield from frame_gen
     finally:
         os.unlink(tpl_file.name)

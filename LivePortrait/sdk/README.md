@@ -62,6 +62,61 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Troubleshooting
+
+### Kokoro TTS not using GPU (`CUDAExecutionProvider` not available)
+
+**Symptom:** Warning on startup:
+```
+UserWarning: Specified provider 'CUDAExecutionProvider' is not in available provider names.
+Available providers: 'AzureExecutionProvider, CPUExecutionProvider'
+```
+
+**Cause:** Both `onnxruntime` (CPU-only) and `onnxruntime-gpu` are installed simultaneously. Python imports the CPU package because it is newer, ignoring CUDA. Additionally, if `onnxruntime` is uninstalled naively, pip removes shared `__init__.py` files that `onnxruntime-gpu` also registered, leaving it broken.
+
+**Fix:** Remove the CPU package and force-reinstall the GPU one:
+
+```bash
+pip uninstall onnxruntime -y
+pip install --force-reinstall onnxruntime-gpu==1.20.1
+```
+
+Verify CUDA is now active:
+
+```bash
+python -c "import onnxruntime as rt; print(rt.get_available_providers())"
+# Expected: ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+```
+
+> `onnxruntime-gpu` is pinned to `1.20.1` — versions 1.21+ on PyPI ship a broken namespace package (`CUDAExecutionProvider` not available). Do not upgrade until a fixed wheel is confirmed.
+
+### `libcudnn_adv.so.9: cannot open shared object file`
+
+**Symptom:**
+```
+[E:onnxruntime] Failed to load library libonnxruntime_providers_cuda.so
+  with error: libcudnn_adv.so.9: cannot open shared object file: No such file or directory
+```
+
+**Cause:** `nvidia-cudnn-cu12` installs its `.so` files under `site-packages/nvidia/cudnn/lib/`, which is not on `LD_LIBRARY_PATH`. The onnxruntime CUDA provider can't find them at load time.
+
+**Fix (already applied in `controllers/tts.py`):** `_preload_cudnn()` uses `ctypes.CDLL(RTLD_GLOBAL)` to load the cuDNN libraries before onnxruntime is imported, making them visible to all subsequent `dlopen()` calls. No manual `LD_LIBRARY_PATH` changes needed.
+
+If you ever need to apply the same fix elsewhere, the pattern is:
+
+```python
+import ctypes, site
+from pathlib import Path
+for sp in site.getsitepackages():
+    cudnn_lib = Path(sp) / "nvidia" / "cudnn" / "lib"
+    if cudnn_lib.exists():
+        for name in ["libcudnn.so.9", "libcudnn_ops.so.9", "libcudnn_adv.so.9"]:
+            p = cudnn_lib / name
+            if p.exists():
+                ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+        break
+```
+
 ## Run
 
 ```bash
