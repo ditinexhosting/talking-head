@@ -117,7 +117,7 @@ def warmup_stream(pipeline) -> None:
     # 4 frames: warmup frames 1-2 do eager + graph capture; frames 3-4 absorb
     # the per-module re-recording that happens when GPU memory addresses shift
     # between sessions (cudagraph_trees check_invariants failure).
-    keyframes = neutral_keyframes(seconds=4 / _FPS, fps=_FPS)
+    keyframes = neutral_keyframes(seconds=2 / _FPS, fps=_FPS)
     template = build_template([kf.to_dict() for kf in keyframes], fps=_FPS)
 
     tpl_file = tempfile.NamedTemporaryFile(suffix=".pkl", delete=False)
@@ -131,7 +131,7 @@ def warmup_stream(pipeline) -> None:
             output_dir=tempfile.mkdtemp(),
             flag_pasteback=False,
         )
-        frame_gen, _ = pipeline.execute_streaming(args)
+        frame_gen, _ = pipeline.execute_streaming(args, source_cache=_source_cache)
         for _ in frame_gen:
             pass
     finally:

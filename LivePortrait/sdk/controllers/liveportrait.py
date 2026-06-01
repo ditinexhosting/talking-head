@@ -15,14 +15,14 @@ _pipeline: LivePortraitPipeline | None = None
 def _warmup(pipeline: LivePortraitPipeline) -> None:
     from sdk.controllers.speech2video.video import warmup_stream, preload_source  # lazy: avoids import cycle
 
-    log("[WARMUP] Driving a 4-frame stream through the real pipeline to specialize torch.compile graphs...")
+    preload_source(pipeline)
+
+    log("[WARMUP] Driving a 2-frame stream through the real pipeline to specialize torch.compile graphs...")
     t0 = time.time()
     warmup_stream(pipeline)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     log(f"[WARMUP] Done in {time.time() - t0:.1f}s")
-
-    preload_source(pipeline)
 
 
 def _get_pipeline() -> LivePortraitPipeline:

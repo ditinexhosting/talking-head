@@ -785,7 +785,6 @@ class LivePortraitPipeline(object):
             _f_s_batch, _x_s_batch, _x_d_batch, _batch_meta = [], [], [], []
 
             for i in range(n_frames):
-                _tf = time.time()
                 if flag_is_source_video:
                     x_s_info_i = source_template_dct['motion'][i]
                     x_s_info_i = dct2device(x_s_info_i, device)
@@ -944,7 +943,7 @@ class LivePortraitPipeline(object):
                 _f_s_batch.append(f_s_use)
                 _x_s_batch.append(x_s_use)
                 _x_d_batch.append(x_d_i_new)
-                _batch_meta.append((i, mask_ori_float, time.time() - _tf))
+                _batch_meta.append((i, mask_ori_float))
 
                 if len(_x_d_batch) < BATCH_SIZE and i < n_frames - 1:
                     continue
@@ -958,25 +957,19 @@ class LivePortraitPipeline(object):
                     x_s_b = _x_s_batch[0].expand(B, *_x_s_batch[0].shape[1:])
                 x_d_b = torch.cat(_x_d_batch, dim=0)
 
-                _tw = time.time()
                 out = self.live_portrait_wrapper.warp_decode(f_s_b, x_s_b, x_d_b)
                 batch_frames = self.live_portrait_wrapper.parse_output(out['out'])
-                _warp_time = (time.time() - _tw) / B
 
                 for j in range(B):
-                    fi, mof, _motion_time = _batch_meta[j]
+                    fi, mof = _batch_meta[j]
                     I_p = batch_frames[j]
                     if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
-                        _tp = time.time()
                         if flag_is_source_video:
                             frame = paste_back(I_p, source_M_c2o_lst[fi], source_rgb_lst[fi], mof)
                         else:
                             frame = paste_back(I_p, crop_info['M_c2o'], source_rgb_lst[0], mof)
-                        _paste_time = time.time() - _tp
-                        log(f'[TIMER] Frame {fi+1}/{n_frames} — motion: {_motion_time:.3f}s | warp+decode: {_warp_time:.3f}s | paste_back: {_paste_time:.3f}s | total: {_motion_time+_warp_time+_paste_time:.3f}s')
                         yield frame
                     else:
-                        log(f'[TIMER] Frame {fi+1}/{n_frames} — motion: {_motion_time:.3f}s | warp+decode: {_warp_time:.3f}s | total: {_motion_time+_warp_time:.3f}s')
                         yield I_p
 
                 _f_s_batch, _x_s_batch, _x_d_batch, _batch_meta = [], [], [], []

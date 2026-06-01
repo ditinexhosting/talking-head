@@ -6,8 +6,11 @@ watchfiles
 python-dotenv
 pydantic
 kokoro-onnx
+onnxruntime-gpu==1.20.1
 numpy
 httpx==0.28.1
 pillow-avif-plugin
 livekit
 livekit-api
+whisperx
+phonemizer-fork
