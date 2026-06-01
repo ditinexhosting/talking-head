@@ -108,6 +108,7 @@ async def _stream_loop(
                         logger.debug("[video] frame gen done idx=%d", sidx)
 
                 threading.Thread(target=_gen_frames, daemon=True, name=f"frame-gen-{idx}").start()
+                await gen_done.wait()
                 idx += 1
 
     asyncio.create_task(_producer())

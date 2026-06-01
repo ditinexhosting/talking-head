@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 import torch
 import whisperx
@@ -105,35 +106,23 @@ def get_visemes(wav_path: str, transcript: str) -> list[dict]:
       [{"start": float, "end": float, "duration": float, "viseme": str}, ...]
 
     Pipeline:
-      1. phonemizer  — text → IPA per word  (~1 ms, CPU)
-      2. WhisperX    — audio → word timestamps  (~150 ms, GPU)
+      1. WhisperX    — audio → word timestamps  (~150 ms, GPU)
+      2. phonemizer  — WhisperX word text → IPA per word  (~1 ms, CPU)
       3. Merge       — distribute each word's phonemes evenly across its time span
     """
     align_model, align_metadata = _get_align_model()
 
-    # ── 1. phonemizer: IPA per word ──────────────────────────────────────────
-    words = _split_words(transcript)
-    if not words:
-        return []
-
-    ipa_list: list[str] = _phonemize(
-        words,
-        backend="espeak",
-        language="en-us",
-        with_stress=True,
-        language_switch="remove-flags",
-    )
-    word_visemes: list[list[str]] = [_ipa_to_visemes(ipa) for ipa in ipa_list]
-
-    # ── 2. WhisperX forced alignment: word timestamps ────────────────────────
+    # ── 1. WhisperX forced alignment: word timestamps ────────────────────────
     audio = whisperx.load_audio(wav_path)
     total_duration = len(audio) / 16000.0
 
     segments = [{"text": transcript, "start": 0.0, "end": total_duration}]
+    _t0 = time.perf_counter()
     result = whisperx.align(
         segments, align_model, align_metadata, audio, DEVICE,
         return_char_alignments=False,
     )
+    logger.info("[viseme] whisperx align: %.3fs", time.perf_counter() - _t0)
 
     aligned_words: list[dict] = []
     for seg in result.get("segments", []):
@@ -147,6 +136,21 @@ def get_visemes(wav_path: str, transcript: str) -> list[dict]:
             "duration": round(total_duration, 3),
             "viseme": "X",
         }]
+
+    # ── 2. phonemizer: IPA for each word returned by WhisperX ────────────────
+    wx_words = [w.get("word", "") for w in aligned_words]
+    words = [_split_words(w)[0] if _split_words(w) else w for w in wx_words]
+
+    _t1 = time.perf_counter()
+    ipa_list: list[str] = _phonemize(
+        words,
+        backend="espeak",
+        language="en-us",
+        with_stress=True,
+        language_switch="remove-flags",
+    )
+    logger.info("[viseme] phonemizer: %.3fs (%d words)", time.perf_counter() - _t1, len(words))
+    word_visemes: list[list[str]] = [_ipa_to_visemes(ipa) for ipa in ipa_list]
 
     # ── 3. Merge: distribute visemes across each word's time span ─────────────
     cues: list[dict] = []
