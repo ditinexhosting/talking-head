@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time as _time
+import warnings
 from datetime import timedelta
 from time import perf_counter
 
@@ -32,19 +33,21 @@ _BUFFER_FRAMES = 1         # pre-roll frames before playback starts
 
 
 def generate_livekit_token(identity: str, room_id: str) -> str:
-    return (
-        AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-        .with_identity(identity)
-        .with_name(identity)
-        .with_grants(VideoGrants(
-            room_join=True,
-            room=room_id,
-            can_publish=True,
-            can_subscribe=True,
-        ))
-        .with_ttl(timedelta(hours=2))
-        .to_jwt()
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return (
+            AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
+            .with_identity(identity)
+            .with_name(identity)
+            .with_grants(VideoGrants(
+                room_join=True,
+                room=room_id,
+                can_publish=True,
+                can_subscribe=True,
+            ))
+            .with_ttl(timedelta(hours=2))
+            .to_jwt()
+        )
 
 
 async def _run_until_disconnected(coro, disconnected: asyncio.Event) -> None:
@@ -71,6 +74,45 @@ def _make_idle_rtc() -> rtc.VideoFrame | None:
 
 
 async def _stream_loop(
+    video_source: rtc.VideoSource,
+    audio_source: rtc.AudioSource | None,
+    text_queue: asyncio.Queue[tuple[str, float]],
+) -> None:
+    """Stream idle frame at FPS; stream audio for each TTS sentence as it arrives."""
+    idle_rtc = _make_idle_rtc()
+
+    async def _audio_producer() -> None:
+        _sample_rate = 24000
+        _samples_per_frame = _sample_rate // FPS
+        _bytes_per_frame = _samples_per_frame * 2  # int16
+        while True:
+            text, _ = await text_queue.get()
+            for sentence in _split_into_sentences(text):
+                _, _, pcm, timings, emotion = await text_to_speech_kokoro(sentence)
+                if audio_source is None or not pcm:
+                    continue
+                for i in range(0, max(len(pcm), _bytes_per_frame), _bytes_per_frame):
+                    chunk = pcm[i: i + _bytes_per_frame]
+                    if len(chunk) < _bytes_per_frame:
+                        chunk = chunk + bytes(_bytes_per_frame - len(chunk))
+                    await audio_source.capture_frame(rtc.AudioFrame(
+                        data=chunk,
+                        sample_rate=_sample_rate,
+                        num_channels=1,
+                        samples_per_channel=_samples_per_frame,
+                    ))
+
+    asyncio.create_task(_audio_producer())
+
+    next_t = perf_counter()
+    while True:
+        if idle_rtc:
+            video_source.capture_frame(idle_rtc)
+        next_t += _FRAME_PERIOD
+        await asyncio.sleep(max(0.0, next_t - perf_counter()))
+
+
+async def _stream_loop_full(
     video_source: rtc.VideoSource,
     audio_source: rtc.AudioSource | None,
     text_queue: asyncio.Queue[tuple[str, float]],

@@ -1,76 +1,61 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
-import os
 import re
-import tempfile
-import time
-import wave
-from pathlib import Path
+from time import perf_counter
 
 import numpy as np
-
-from sdk.controllers.viseme import get_visemes
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
-_ASSETS = Path(__file__).parent.parent / "assets"
-_MODEL_PATH = str(_ASSETS / "kokoro-v1.0.onnx")
-_VOICES_PATH = str(_ASSETS / "voices-v1.0.bin")
+_emotion_classifier = None
 
 
-_kokoro = None
+def _get_emotion_classifier():
+    global _emotion_classifier
+    if _emotion_classifier is None:
+        from transformers import pipeline as hf_pipeline
+        logger.info("[tts] loading emotion classifier")
+        _emotion_classifier = hf_pipeline(
+            "text-classification",
+            model="j-hartmann/emotion-english-distilroberta-base",
+            top_k=None,
+            device=0,  # cuda:0
+        )
+        logger.info("[tts] emotion classifier ready")
+    return _emotion_classifier
+
+_LANG_CODE_MAP = {
+    "en-us": "a",
+    "en-gb": "b"
+}
+
+_SAMPLE_RATE = 24000
+
+_VOICE = "am_puck"
+
+_pipeline_cache: dict[str, object] = {}
 
 
-def _preload_cudnn():
-    """Preload cuDNN .so files so onnxruntime's CUDA provider can find them.
-
-    The nvidia-cudnn-cu12 wheel installs into site-packages/nvidia/cudnn/lib/,
-    which is not on LD_LIBRARY_PATH. ctypes.CDLL with RTLD_GLOBAL makes each
-    library visible to subsequent dlopen() calls (including libonnxruntime_providers_cuda.so).
-    """
-    import ctypes
-    import site
-    from pathlib import Path as _Path
-
-    for sp in site.getsitepackages():
-        cudnn_lib = _Path(sp) / "nvidia" / "cudnn" / "lib"
-        if not cudnn_lib.exists():
-            continue
-        load_order = [
-            "libcudnn.so.9",
-            "libcudnn_ops.so.9",
-            "libcudnn_adv.so.9",
-            "libcudnn_cnn.so.9",
-            "libcudnn_graph.so.9",
-            "libcudnn_heuristic.so.9",
-            "libcudnn_engines_precompiled.so.9",
-            "libcudnn_engines_runtime_compiled.so.9",
-        ]
-        for name in load_order:
-            p = cudnn_lib / name
-            if p.exists():
-                try:
-                    ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
-                except OSError as e:
-                    logger.warning("[tts] failed to preload %s: %s", name, e)
-        break
-
-
-def _get_kokoro():
-    global _kokoro
-    if _kokoro is None:
-        _preload_cudnn()
-        import onnxruntime as rt
-        from kokoro_onnx import Kokoro
-        available = rt.get_available_providers()
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
-        logger.info("[tts] onnxruntime providers: %s", providers)
-        session = rt.InferenceSession(_MODEL_PATH, providers=providers)
-        _kokoro = Kokoro.from_session(session, _VOICES_PATH)
-    return _kokoro
+def _get_pipeline(lang_code: str):
+    if lang_code not in _pipeline_cache:
+        import warnings
+        from kokoro import KPipeline
+        logger.info("[tts] loading KPipeline lang_code=%s", lang_code)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pipe = KPipeline(lang_code=lang_code, device="cuda", repo_id="hexgrad/Kokoro-82M")
+        import torch
+        model_device = next(pipe.model.parameters()).device if hasattr(pipe, "model") else "unknown"
+        print(f"[tts] KPipeline loaded lang={lang_code} model_device={model_device} cuda_available={torch.cuda.is_available()}")
+        _t_warm = perf_counter()
+        for _ in pipe("hi", voice=_VOICE):
+            pass
+        print(f"[tts] warmup took {perf_counter() - _t_warm:.3f}s")
+        _pipeline_cache[lang_code] = pipe
+    return _pipeline_cache[lang_code]
 
 
 def _split_into_sentences(text: str) -> list[str]:
@@ -78,61 +63,117 @@ def _split_into_sentences(text: str) -> list[str]:
     if not text:
         return []
     text = re.sub(r'\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx)\.', r'\1<DOT>', text)
-    pattern = r'(?<=[.!?])\s+'
-    raw = re.split(pattern, text)
-    sentences = []
-    for chunk in raw:
-        chunk = chunk.strip().replace('<DOT>', '.')
-        if chunk:
-            sentences.append(chunk)
-    return sentences
+    raw = re.split(r'(?<=[.!?])\s+', text)
+    return [chunk.strip().replace('<DOT>', '.') for chunk in raw if chunk.strip()]
 
 
-def _samples_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
-    pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.tobytes())
-    return buf.getvalue()
+def _split_into_clauses(sentence: str) -> list[str]:
+    sentence = sentence.strip()
+    if not sentence:
+        return []
+    raw = re.split(
+        r'[,;:\-–—]+\s*|\s+(?=(?:because|although|while|when|if|unless|since|so|but|and|or|nor|yet)\s)',
+        sentence,
+        flags=re.IGNORECASE,
+    )
+    return [chunk.strip() for chunk in raw if chunk.strip()]
 
 
+def _assign_clause_timings(emotions: list[dict], timings: list[dict]) -> list[dict]:
+    t_idx = 0
+    out = []
+    for entry in emotions:
+        words = [w.lower() for w in re.findall(r"[a-zA-Z']+", entry["clause"])]
+        w_idx = 0
+        clause_start = None
+        clause_end = None
+        scan = t_idx
+        while scan < len(timings) and w_idx < len(words):
+            gs_clean = re.sub(r"[^a-zA-Z']", "", timings[scan]["gs"]).lower()
+            if gs_clean == words[w_idx]:
+                if w_idx == 0:
+                    clause_start = timings[scan]["start"]
+                clause_end = timings[scan]["end"]
+                w_idx += 1
+            scan += 1
+        if w_idx > 0:
+            t_idx = scan
+        out.append({**entry, "start": clause_start, "end": clause_end})
+    return out
+
+
+def _run_tts_sync(sentence: str, voice: str, speed: float, lang: str):
+    lang_code = _LANG_CODE_MAP.get(lang, "a")
+    sentence = sentence.strip()
+
+    def _do_tts():
+        pipeline = _get_pipeline(lang_code)
+        gs_parts, ps_parts, audio_parts = [], [], []
+        timings: list[dict] = []
+        time_offset = 0.0
+        for result in pipeline(sentence, voice=voice, speed=speed):
+            gs_parts.append(result.graphemes)
+            ps_parts.append(result.phonemes)
+            if result.audio is not None:
+                audio_parts.append(result.audio)
+            for token in (result.tokens or []):
+                if not token.phonemes:
+                    continue
+                start = getattr(token, 'start_ts', None)
+                end = getattr(token, 'end_ts', None)
+                if start is not None and end is not None:
+                    timings.append({
+                        "gs": token.text,
+                        "ps": token.phonemes,
+                        "start": round(time_offset + start, 4),
+                        "end": round(time_offset + end, 4),
+                    })
+            if result.audio is not None:
+                time_offset += len(result.audio) / 24000.0
+        all_gs = " ".join(gs_parts)
+        all_ps = " ".join(ps_parts)
+        if audio_parts:
+            all_audio = (np.clip(np.concatenate(audio_parts), -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+        else:
+            all_audio = b""
+        return all_gs, all_ps, all_audio, timings
+
+    def _do_emotion():
+        try:
+            clauses = _split_into_clauses(sentence)
+            if not clauses:
+                return []
+            classifier = _get_emotion_classifier()
+            out = []
+            for clause, scores in zip(clauses, classifier(clauses)):
+                top = sorted(scores, key=lambda x: x["score"], reverse=True)[0]
+                out.append({"clause": clause, "emotion": top["label"], "score": round(top["score"], 4)})
+            return out
+        except Exception as exc:
+            logger.warning("[tts] emotion failed: %s", exc)
+            return []
+
+    _t0 = perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        tts_future = ex.submit(_do_tts)
+        emotion_future = ex.submit(_do_emotion)
+        all_gs, all_ps, all_audio, timings = tts_future.result()
+        emotion = emotion_future.result()
+    emotion = _assign_clause_timings(emotion, timings)
+    print(f"[tts] pipeline took {perf_counter() - _t0:.3f}s")
+    print(all_gs, all_ps, timings)
+    print(f"[tts] emotion: {emotion}")
+    return all_gs, all_ps, all_audio, timings, emotion
 
 
 async def text_to_speech_kokoro(
     text: str,
-    voice: str = "am_adam",
+    voice: str = _VOICE,
     speed: float = 1.0,
     lang: str = "en-us",
-) -> tuple:
-    """Returns (audio_bytes, sample_rate, visemes, sentence) for a single sentence."""
-    kokoro = _get_kokoro()
+) -> tuple[str, str, bytes, list[dict], list[dict]]:
+    """Returns (gs, ps, pcm, timings, emotion) — graphemes, phonemes, int16 PCM bytes at 24 kHz, per-token timings, emotion scores."""
     loop = asyncio.get_event_loop()
-    sentence = text.strip()
-    total_start = time.perf_counter()
-
-    t = time.perf_counter()
-    samples, sample_rate = await loop.run_in_executor(
-        None, lambda: kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
+    return await loop.run_in_executor(
+        None, lambda: _run_tts_sync(text.strip(), voice, speed, lang)
     )
-    logger.info("[tts] kokoro.create=%.3fs", time.perf_counter() - t)
-
-    t = time.perf_counter()
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
-    with os.fdopen(tmp_fd, "wb") as f:
-        f.write(_samples_to_wav_bytes(samples, sample_rate))
-
-    try:
-        t = time.perf_counter()
-        visemes = await loop.run_in_executor(None, get_visemes, tmp_path, sentence)
-        logger.info("[tts] visemes=%.3fs  count=%d", time.perf_counter() - t, len(visemes))
-    finally:
-        os.unlink(tmp_path)
-
-    pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
-    audio_bytes = pcm.tobytes()
-
-    logger.info("[tts] total=%.3fs | %r", time.perf_counter() - total_start, sentence)
-    return audio_bytes, sample_rate, visemes, sentence
